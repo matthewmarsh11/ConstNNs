@@ -20,23 +20,18 @@ class MCD_NN(BaseModel):
         self.output_dim = output_dim
         self.num_samples = num_samples
         
-        self.A = A
-        self.B = B
-        self.b = b
+        self.register_buffer("A", A.unsqueeze(0) if A.shape[0] == input_dim else A)
+        self.register_buffer("B", B.unsqueeze(0) if B.shape[0] == output_dim else B)
+        self.register_buffer("b", b)
 
-        if self.A.shape[0] == self.input_dim:
-            self.A = self.A.unsqueeze(0)
-        if self.B.shape[0] == self.output_dim:
-            self.B = self.B.unsqueeze(0)
-        
-        self.chunk = torch.mm(self.B.t(),
-                             torch.inverse(
-                                 torch.mm(self.B, self.B.t())
-                             )
-                             )
-        self.Astar = - torch.mm(self.chunk, self.A)
-        self.Bstar = torch.eye(output_dim).to(self.config.device) - torch.mm(self.chunk, self.B)
-        self.bstar = torch.matmul(self.chunk, self.b).squeeze(-1)    
+        chunk = torch.mm(self.B.t(), torch.inverse(torch.mm(self.B, self.B.t())))
+        Astar = -torch.mm(chunk, self.A)
+        Bstar = torch.eye(output_dim, device=self.config.device) - torch.mm(chunk, self.B)
+        bstar = torch.matmul(chunk, self.b).squeeze(-1)
+
+        self.register_buffer("Astar", Astar)
+        self.register_buffer("Bstar", Bstar)
+        self.register_buffer("bstar", bstar)
         
         self.num_constraints = self.A.shape[0]
         

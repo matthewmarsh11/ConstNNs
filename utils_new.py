@@ -531,8 +531,6 @@ def main():
         batch_size=50,
         num_epochs=50,
         learning_rate=0.0031,
-        time_step=10,
-        horizon=5,
         weight_decay=0.01,
         factor=0.1,
         patience=10,
@@ -581,6 +579,19 @@ def main():
     A = torch.Tensor([0 , -1 , 0])
     B = torch.Tensor([1, 2, 1, 0])
     b = torch.Tensor([0])
+    
+    device = MLP_Config.device
+
+    X_train = X_train.to(device)
+    y_train = y_train.to(device)
+    X_test = X_test.to(device)
+    y_test = y_test.to(device)
+    X_val = X_val.to(device)
+    y_val = y_val.to(device)
+
+    A = A.to(device)
+    B = B.to(device)
+    b = b.to(device)
     
     model = MCD_NN(
         config = MLP_Config,

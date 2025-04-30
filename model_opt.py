@@ -38,6 +38,19 @@ def objective(trial, training_config: TrainingConfig, model_config: MLPConfig,
     model_config.num_layers = trial.suggest_int("num_layers", 1, 5)
     model_config.activation = trial.suggest_categorical("activation", ["ReLU", "LeakyReLU", "Tanh", "Softplus"])
     
+    device = model_config.device
+
+    X_train = X_train.to(device)
+    y_train = y_train.to(device)
+    X_test = X_test.to(device)
+    y_test = y_test.to(device)
+    X_val = X_val.to(device)
+    y_val = y_val.to(device)
+
+    A = A.to(device)
+    B = B.to(device)
+    b = b.to(device)
+    
     model = MCD_NN(config=model_config,
                    input_dim=X_train.shape[1],
                    output_dim=y_train.shape[1],
