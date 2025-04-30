@@ -16,7 +16,7 @@ import seaborn as sns
 
 from tqdm import tqdm
 from base import *
-from cstr import *
+# from cstr import *
 # np.random.seed(42)
 # torch.manual_seed(42)
 from collections import defaultdict
@@ -173,7 +173,7 @@ class ModelTrainer:
         
     def train(self, X_train, y_train, X_test, y_test, X_val, y_val, criterion):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.learning_rate, weight_decay = self.config.weight_decay)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=self.config.factor, patience=self.config.patience, verbose=True)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=self.config.factor, patience=self.config.patience)
         early_stopping = EarlyStopping(self.config)
         history = {'train_loss': [], 'test_loss': [], 'val_loss': [], 'avg_loss': []}
         for epoch in range(self.config.num_epochs):

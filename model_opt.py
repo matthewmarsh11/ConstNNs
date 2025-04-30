@@ -4,6 +4,7 @@ import optuna
 from utils_new import *
 from models.mcd_nn import MCD_NN
 from base import TrainingConfig, MLPConfig
+from optuna.trial import TrialState
 
 
 def objective(trial, training_config: TrainingConfig, model_config: MLPConfig, 
@@ -58,6 +59,7 @@ def objective(trial, training_config: TrainingConfig, model_config: MLPConfig,
                    A = A,
                    B = B,
                     b = b)
+    model.to(device)
     
     trainer = trainer(model, training_config)
     model, history, avg_loss = trainer.train(X_train, y_train, X_test, y_test, X_val, y_val, criterion)
@@ -85,6 +87,8 @@ features_path = 'datasets/small_cstr_features.csv'
 targets_path = 'datasets/small_cstr_targets.csv'
 noiseless_path = 'datasets/small_cstr_noiseless_results.csv'
 
+print(model_config.device)
+
 features = pd.read_csv(features_path)
 features = features.iloc[:, :-1]
 targets = features.iloc[:, :4]
@@ -109,3 +113,19 @@ criterion = nn.MSELoss()
 
 study = optuna.create_study(direction="minimize")
 study.optimize(lambda trial: objective(trial, training_config, model_config, X_train, y_train, X_test, y_test, X_val, y_val, A, B, b, trainer, criterion), n_trials=100)
+pruned_trials = study.get_trials(deepcopy=False, states=[TrialState.PRUNED])
+complete_trials = study.get_trials(deepcopy=False, states=[TrialState.COMPLETE])
+
+print("Study statistics: ")
+print("  Number of finished trials: ", len(study.trials))
+print("  Number of pruned trials: ", len(pruned_trials))
+print("  Number of complete trials: ", len(complete_trials))
+
+print("Best trial:")
+trial = study.best_trial
+
+print("  Value: ", trial.value)
+
+print("  Params: ")
+for key, value in trial.params.items():
+    print("    {}: {}".format(key, value))
