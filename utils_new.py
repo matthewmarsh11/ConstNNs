@@ -23,6 +23,7 @@ from collections import defaultdict
 from abc import ABC, abstractmethod
 from models.mlp import *
 from models.mcd_nn import *
+from models.ec_nn import *
 
 class ScalingResult(NamedTuple):
     """Container for scaled mean and variance results"""
@@ -175,7 +176,8 @@ class ModelTrainer:
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.learning_rate, weight_decay = self.config.weight_decay)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=self.config.factor, patience=self.config.patience)
         early_stopping = EarlyStopping(self.config)
-        history = {'train_loss': [], 'test_loss': [], 'val_loss': [], 'avg_loss': []}
+        history = {'train_loss': [], 'test_loss': [], 'val_loss': [], 'avg_loss': [],
+                   'np_train_loss': [], 'np_test_loss': [], 'np_val_loss': [], 'np_avg_loss': []}
         for epoch in range(self.config.num_epochs):
             # Training
             self.model.train()
@@ -185,7 +187,7 @@ class ModelTrainer:
             if criterion.__class__.__name__ == 'GaussianMVNLL':
                 train_loss = self._NLL_train_epoch(train_loader, criterion, optimizer)
             else:
-                train_loss = self._train_epoch(train_loader, criterion, optimizer)
+                train_loss, np_train_loss = self._train_epoch(train_loader, criterion, optimizer)
                 
             # Validation
             self.model.eval()
@@ -199,8 +201,8 @@ class ModelTrainer:
                 test_loss = self._NLL_validate_epoch(test_loader, criterion)
                 val_loss = self._NLL_validate_epoch(val_loader, criterion)
             else:
-                test_loss = self._validate_epoch(test_loader, criterion)
-                val_loss = self._validate_epoch(val_loader, criterion)
+                test_loss, np_test_loss = self._validate_epoch(test_loader, criterion)
+                val_loss, np_val_loss = self._validate_epoch(val_loader, criterion)
 
             
             # Calculate average losses
@@ -209,11 +211,21 @@ class ModelTrainer:
             avg_val_loss = val_loss / len(val_loader)
             avg_loss = (avg_train_loss + avg_test_loss) / 2
             
+            avg_np_train_loss = np_train_loss / len(train_loader)
+            avg_np_test_loss = np_test_loss / len(test_loader)
+            avg_np_val_loss = np_val_loss / len(val_loader)
+            avg_np_loss = (avg_np_train_loss + avg_np_test_loss) / 2
+            
             # Update history
             history['train_loss'].append(avg_train_loss)
             history['test_loss'].append(avg_test_loss)
             history['val_loss'].append(avg_val_loss)
             history['avg_loss'].append(avg_loss)
+            
+            history['np_train_loss'].append(avg_np_train_loss)
+            history['np_test_loss'].append(avg_np_test_loss)
+            history['np_val_loss'].append(avg_np_val_loss)
+            history['np_avg_loss'].append(avg_np_loss)
             
             # Use average loss for scheduler
             scheduler.step(avg_loss)
@@ -306,15 +318,18 @@ class ModelTrainer:
     def _train_epoch(self, train_loader: DataLoader, criterion: nn.Module, 
                     optimizer: torch.optim.Optimizer) -> float:
         total_loss = 0
+        np_total_loss = 0
         for batch_X, batch_y in train_loader:
             batch_X, batch_y = batch_X.to(self.device), batch_y.to(self.device)
             optimizer.zero_grad()
-            predictions, _ = self.model(batch_X)
+            predictions, np_preds = self.model(batch_X)
             loss = criterion(predictions, batch_y)
+            np_loss = criterion(np_preds, batch_y)
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
-        return total_loss
+            np_total_loss += np_loss.item()
+        return total_loss, np_total_loss
     
     def _NLL_train_epoch(self, train_loader: DataLoader, criterion: nn.Module,
                         optimizer: torch.optim.Optimizer) -> float:
@@ -331,13 +346,16 @@ class ModelTrainer:
     
     def _validate_epoch(self, test_loader: DataLoader, criterion: nn.Module) -> float:
         total_loss = 0
+        np_total_loss = 0
         with torch.no_grad():
             for batch_X, batch_y in test_loader:
                 batch_X, batch_y = batch_X.to(self.device), batch_y.to(self.device)
-                predictions, _ = self.model(batch_X)
+                predictions, np_preds = self.model(batch_X)
                 loss = criterion(predictions, batch_y)
+                np_loss = criterion(np_preds, batch_y)
                 total_loss += loss.item()
-        return total_loss
+                np_total_loss += np_loss.item()
+        return total_loss, np_total_loss
 
     def _NLL_validate_epoch(self, test_loader: DataLoader, criterion: nn.Module) -> float:
         total_loss = 0
@@ -528,13 +546,13 @@ class Visualizer:
 def main():
     
     training_config = TrainingConfig(
-        batch_size=50,
-        num_epochs=50,
-        learning_rate=0.0031,
-        weight_decay=0.01,
-        factor=0.1,
-        patience=10,
-        delta = 0.042,
+        batch_size=65,
+        num_epochs=100,
+        learning_rate=0.00294,
+        weight_decay=0.0001,
+        factor=0.3737,
+        patience=14,
+        delta = 0.000042,
         train_test_split=0.6,
         test_val_split=0.8,
         # device = "mps" if torch.backends.mps.is_available() else "cpu",
@@ -542,7 +560,7 @@ def main():
     )
     
     MLP_Config = MLPConfig(
-        hidden_dim = 1024,
+        hidden_dim = 70,
         num_layers = 3,
         dropout = 0.2,
         activation = 'ReLU',
@@ -617,7 +635,7 @@ def main():
     
     model.eval()
     model.enable_dropout()
-    feature_names = ['ca', 'cb', 'cc', 'temp', 'vol']
+    feature_names = ['ca', 'cb', 'cc', 'temp']
     simulations = {}
     simulations = {i: None for i in range(X_tensor.shape[0])}
     np_simulations = {}
@@ -628,65 +646,97 @@ def main():
             simulations[i] = prj_preds.cpu().numpy()
             np_simulations[i] = nprj_preds.cpu().numpy()
 
-    simulation_1 = simulations[0]
-    np_simulation_1 = np_simulations[0]
-    
+    # Plot for all simulations
+    plt.figure(figsize=(15, 10))
+
     # plot the error distribution
     
-    for j in range(simulation_1.shape[1]):
-        simulation_1[:, j, :] = data_processor.target_scaler.inverse_transform(simulation_1[:, j, :])
-        np_simulation_1[:, j, :] = data_processor.target_scaler.inverse_transform(np_simulation_1[:, j, :])
-        # Plot distribution of simulation_1 with overlay of np_simulation_1
-        # plt.figure(figsize=(15, 10))
-        # for i in range(simulation_1.shape[2]):  # For each feature
-        #     plt.subplot(math.ceil(simulation_1.shape[2]/2), 2, i+1)
-        #     # Create histogram with KDE for both projected and non-projected data
-        #     sns.histplot(simulation_1[:, j, i], kde=True, color='blue', alpha=0.6, label='Projected')
-        #     sns.histplot(np_simulation_1[:, j, i], kde=True, color='red', alpha=0.6, label='Non-Projected')
-        #     plt.axvline(noiseless_targets[0, j, i], color='black', linestyle='dashed', label='Noiseless Actual')
-        #     plt.title(f'Distribution of {feature_names[i]} at time {j}')
-        #     plt.xlabel(f'{feature_names[i]} value')
-        #     plt.ylabel('Frequency')
-        #     plt.legend()
-        # plt.tight_layout()
-        # plt.show()
-    
-    # plot the trajectory of the simulation
-    
-    sim_mean = simulation_1.mean(axis = 0)
-    # sim_mean = data_processor.target_scaler.inverse_transform(sim_mean)
-    np_sim_mean = np_simulation_1.mean(axis = 0)
-    # np_sim_mean = data_processor.target_scaler.inverse_transform(np_sim_mean)
-    plt.figure(figsize=(15, 10))
-    for i in range(sim_mean.shape[1]):
-        plt.subplot(math.ceil(sim_mean.shape[1]/2), 2, i+1)
-        plt.plot(noisy_targets[0, :, i], label = 'Noisy Data', color = 'green')
-        plt.plot(noiseless_targets[0, :, i], label = 'Noiseless Data', color = 'black', linestyle = 'dashed')
-        plt.plot(sim_mean[:, i], label = feature_names[i])
-        plt.plot(np_sim_mean[:, i], label = f'Non-Projected {feature_names[i]}', linestyle = 'dashed')
-        plt.title(f'Mean of {feature_names[i]}')
+    # for j in range(simulation_1.shape[1]):
+        # simulation_1[:, j, :] = data_processor.target_scaler.inverse_transform(simulation_1[:, j, :])
+        # np_simulation_1[:, j, :] = data_processor.target_scaler.inverse_transform(np_simulation_1[:, j, :])
+    #     # Plot distribution of simulation_1 with overlay of np_simulation_1
+    #     plt.figure(figsize=(15, 10))
+    #     for i in range(simulation_1.shape[2]):  # For each feature
+    #         plt.subplot(math.ceil(simulation_1.shape[2]/2), 2, i+1)
+    #         # Create histogram with KDE for both projected and non-projected data
+    #         sns.histplot(simulation_1[:, j, i], kde=True, color='blue', alpha=0.6, label='Projected')
+    #         sns.histplot(np_simulation_1[:, j, i], kde=True, color='red', alpha=0.6, label='Non-Projected')
+    #         plt.axvline(noiseless_targets[0, j, i], color='black', linestyle='dashed', label='Noiseless Actual')
+    #         plt.title(f'Distribution of {feature_names[i]} at time {j}')
+    #         plt.xlabel(f'{feature_names[i]} value')
+    #         plt.ylabel('Frequency')
+    #         plt.legend()
+    #     plt.tight_layout()
+    #     plt.show()
+
+    # Plot the trajectory of all simulations
+    for sim_idx in range(len(simulations)):
+        simulation = simulations[sim_idx]
+        np_simulation = np_simulations[sim_idx]
+        
+        for j in range(simulation.shape[1]):
+            simulation[:, j, :] = data_processor.target_scaler.inverse_transform(simulation[:, j, :])
+            np_simulation[:, j, :] = data_processor.target_scaler.inverse_transform(np_simulation[:, j, :])
+        
+        sim_mean = simulation.mean(axis=0) if hasattr(simulation, 'mean') else simulation
+        sim_std = simulation.std(axis=0) if hasattr(simulation, 'std') else np.zeros_like(sim_mean)
+        np_sim_mean = np_simulation.mean(axis=0) if hasattr(np_simulation, 'mean') else np_simulation
+        np_sim_std = np_simulation.std(axis=0) if hasattr(np_simulation, 'std') else np.zeros_like(np_sim_mean)
+        
+        plt.figure(figsize=(15, 10))
+        plt.suptitle(f'Simulation {sim_idx+1}', fontsize=16)
+        for i in range(sim_mean.shape[1]):
+            plt.subplot(math.ceil(sim_mean.shape[1]/2), 2, i+1)
+            
+            # Plot ground truth data
+            plt.plot(noisy_targets[sim_idx, :, i], label='Noisy Data', color='green')
+            plt.plot(noiseless_targets[sim_idx, :, i], label='Noiseless Data', color='black', linestyle='dashed')
+            
+            # Plot projected predictions with uncertainty
+            time_steps = range(len(sim_mean))
+            plt.plot(sim_mean[:, i], label=feature_names[i], color='blue')
+            plt.fill_between(time_steps, 
+                             sim_mean[:, i] - 2*sim_std[:, i],
+                             sim_mean[:, i] + 2*sim_std[:, i],
+                             color='blue', alpha=0.2, label=f'{feature_names[i]} Uncertainty')
+            
+            # Plot non-projected predictions with uncertainty
+            plt.plot(np_sim_mean[:, i], label=f'Non-Projected {feature_names[i]}', 
+                     linestyle='dashed', color='red')
+            plt.fill_between(time_steps,
+                             np_sim_mean[:, i] - 2*np_sim_std[:, i],
+                             np_sim_mean[:, i] + 2*np_sim_std[:, i],
+                             color='red', alpha=0.2, label=f'Non-Projected Uncertainty')
+            
+            plt.title(f'Mean and Uncertainty of {feature_names[i]}')
+            plt.xlabel('Time step')
+            plt.ylabel(f'{feature_names[i]} value')
+            plt.legend()
+        plt.tight_layout()
+        plt.show()
+        
+        # Plot constraint violation for each simulation
+        constraint = np.zeros((sim_mean.shape[0], 1))
+        unprojected_constraint = np.zeros((sim_mean.shape[0], 1))
+        constraint_true = np.zeros((sim_mean.shape[0], 1))
+        
+        for i in range(sim_mean.shape[0]):
+            constraint[i] = A.cpu().numpy() @ noiseless_features[sim_idx, i, :] + B.cpu().numpy() @ sim_mean[i, :] - b.cpu().numpy()
+            unprojected_constraint[i] = A.cpu().numpy() @ noiseless_features[sim_idx, i, :] + B.cpu().numpy() @ np_sim_mean[i, :] - b.cpu().numpy()
+            constraint_true[i] = A.cpu().numpy() @ noiseless_features[sim_idx, i, :] + B.cpu().numpy() @ noiseless_targets[sim_idx, i, :] - b.cpu().numpy()
+        
+        plt.figure(figsize=(15, 6))
+        plt.title(f'Constraint Violation - Simulation {sim_idx+1}')
+        plt.plot(constraint, label='Projected Model')
+        plt.plot(unprojected_constraint, label='Non-Projected Model', linestyle='dashed')
+        plt.axhline(0, color='black', linestyle='dashed', label='Zero Violation')
+        plt.plot(constraint_true, label='True Data', linestyle='dashed', color='green')
         plt.xlabel('Time step')
-        plt.ylabel(f'{feature_names[i]} value')
+        plt.ylabel('Constraint Violation')
         plt.legend()
-    plt.tight_layout()
-    plt.show()
-    
-    constraint = np.zeros((sim_mean.shape[0], 1))
-    unprojected_constraint = np.zeros((sim_mean.shape[0], 1))
-    constraint_true = np.zeros((sim_mean.shape[0], 1))
-    # plot the constraint violation Ax + By - b = 0
-    for i in range(sim_mean.shape[0]):
-        constraint[i] = A @ noiseless_features[0, i, :]  + B @ sim_mean[i, :] - b
-        unprojected_constraint[i] = A @ noiseless_features[0, i, :]  + B @ np_sim_mean[i, :] - b
-        constraint_true[i] = A @ noiseless_features[0, i, :]  + B @ noiseless_targets[0, i, :] - b
-    
-    plt.figure(figsize=(15, 10))
-    plt.plot(constraint, label = f'Constraint violation at time {i}')
-    plt.plot(unprojected_constraint, label = f'Non-Projected Constraint violation at time {i}', linestyle = 'dashed')
-    plt.axhline(0, color = 'black', linestyle = 'dashed')
-    plt.plot(constraint_true, label = f'True Constraint violation at time {i}', linestyle = 'dashed')
-    plt.legend()
-    
+        plt.show()
+
+    # Plot the loss history
     action_names = ['inlet temp', 'feed conc', 'coolant temp']
     visualizer = Visualizer()
 

@@ -497,7 +497,7 @@ class CSTRSimulator():
         
         return SimulationResult(obs_states, dist_states, action_states)
 
-# config = SimulationConfig(n_simulations=10, T=100, tsim=100, noise_percentage={'Ca': 0.02, 'Cb': 0.02, 'Cc': 0.02, 'T': 0.01})
+# config = SimulationConfig(n_simulations=1, T=100, tsim=100, noise_percentage={'Ca': 0.02, 'Cb': 0.02, 'Cc': 0.02, 'T': 0.01})
 # simulator = CSTRSimulator(config)
 
 # # # Run multiple simulations
