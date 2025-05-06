@@ -13,6 +13,7 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error
 from torch.distributions import Normal
 import math
 import seaborn as sns
+import os
 
 from tqdm import tqdm
 from base import *
@@ -176,14 +177,19 @@ class ModelTrainer:
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.learning_rate, weight_decay = self.config.weight_decay)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=self.config.factor, patience=self.config.patience)
         early_stopping = EarlyStopping(self.config)
+<<<<<<< HEAD
         history = {'train_loss': [], 'test_loss': [], 'val_loss': [], 'avg_loss': [],
                    'np_train_loss': [], 'np_test_loss': [], 'np_val_loss': [], 'np_avg_loss': []}
         for epoch in range(self.config.num_epochs):
             # Training
             self.model.train()
 
+            num_workers = 0
+            # use_pin_memory = self.device.type == 'cuda' 
+            use_pin_memory = False
+
             train_dataset = TensorDataset(X_train, y_train)
-            train_loader = DataLoader(train_dataset, batch_size=self.config.batch_size, shuffle=True)
+            train_loader = DataLoader(train_dataset, batch_size=self.config.batch_size, shuffle=True, num_workers=num_workers, pin_memory=use_pin_memory)
             if criterion.__class__.__name__ == 'GaussianMVNLL':
                 train_loss = self._NLL_train_epoch(train_loader, criterion, optimizer)
             else:
@@ -191,11 +197,11 @@ class ModelTrainer:
                 
             # Validation
             self.model.eval()
-            self.model.enable_dropout()
+            # self.model.enable_dropout()
             test_dataset = TensorDataset(X_test, y_test)
-            test_loader = DataLoader(test_dataset, batch_size=self.config.batch_size, shuffle=False)                
+            test_loader = DataLoader(test_dataset, batch_size=self.config.batch_size, shuffle=False, num_workers=num_workers, pin_memory=use_pin_memory)                
             val_dataset = TensorDataset(X_val, y_val)
-            val_loader = DataLoader(val_dataset, batch_size=self.config.batch_size, shuffle=False)
+            val_loader = DataLoader(val_dataset, batch_size=self.config.batch_size, shuffle=False, num_workers=num_workers, pin_memory=use_pin_memory)
             
             if criterion.__class__.__name__ == 'GaussianMVNLL':
                 test_loss = self._NLL_validate_epoch(test_loader, criterion)
