@@ -52,14 +52,17 @@ def objective(trial, training_config: TrainingConfig, model_config: MLPConfig,
     B = B.to(device)
     b = b.to(device)
     
-    model = MCD_NN(config=model_config,
-                   input_dim=X_train.shape[1],
-                   output_dim=y_train.shape[1],
-                   num_samples=1,
-                   A=A,
-                   B=B,
-                   b=b)
-    model.to(device)
+    model = EC_NN(
+        config = model_config,
+        input_dim=X_train.shape[1],
+        output_dim=y_train.shape[1],
+        A = A,
+        B = B,
+        b = b,
+        dependent_ids=[2],
+        num_samples = None
+    )
+    
     
     # Create a trainer instance from the trainer class
     model_trainer = trainer_class(model, training_config)
@@ -71,7 +74,7 @@ def objective(trial, training_config: TrainingConfig, model_config: MLPConfig,
 def run_optimization():
     training_config = TrainingConfig(
         batch_size=64,
-        num_epochs=100,
+        num_epochs=150,
         learning_rate=0.001,
         weight_decay=0.0001,
         factor=0.1,
@@ -112,7 +115,9 @@ def run_optimization():
     b = torch.Tensor([0])
 
     trainer_class = ModelTrainer
-    criterion = nn.MSELoss()
+    # criterion = nn.MSELoss()
+    from mv_gaussian_nll import GaussianMVNLL
+    criterion = GaussianMVNLL()
 
     # Create and run Optuna study
     study = optuna.create_study(direction="minimize")
