@@ -11,8 +11,8 @@ class MCD_NN(BaseModel):
     
     """
     
-    def __init__(self, config: MLPConfig, input_dim: int, output_dim: int,
-                num_samples: int, A: torch.Tensor, B: torch.Tensor, b: torch.Tensor):
+    def __init__(self, config: MLPConfig, input_dim: int, output_dim: int, 
+                 A: torch.Tensor, B: torch.Tensor, b: torch.Tensor, num_samples: int):
     
         super().__init__(config)
         
