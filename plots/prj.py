@@ -23,10 +23,10 @@ def draw_confidence_ellipse(mean, cov, ax, confidence=0.95, facecolor='none', ed
 
 # === Define distributions ===
 mu1 = np.array([1.5, 1.5])
-cov1 = np.array([[0.05, 0.03], [0.03, 0.05]])
+cov1 = np.array([[0.5, 0.03], [0.01, 0.7]])
 
 mu2 = np.array([0.0, 0.0])  # Projected to constraint zone
-cov2 = np.array([[0.05, 0.03], [0.03, 0.05]])
+cov2 = np.array([[0.1, 0.03], [0.03, 0.05]])
 
 # Constraint target (soft equality center)
 c = np.array([0.0, 0.0])
@@ -61,7 +61,7 @@ ax.text(*(mu1 + mu2)/2 + np.array([0.8, 0.6]), 'Projection', color='black', font
 
 # Constraint ellipse (soft equality constraint zone)
 constraint_cov = np.array([
-    [0.1, 0.0],
+    [10000000, 0.0],
     [0.0, 0.2]
 ])
 
