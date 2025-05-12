@@ -177,7 +177,6 @@ class ModelTrainer:
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.learning_rate, weight_decay = self.config.weight_decay)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=self.config.factor, patience=self.config.patience)
         early_stopping = EarlyStopping(self.config)
-<<<<<<< HEAD
         history = {'train_loss': [], 'test_loss': [], 'val_loss': [], 'avg_loss': [],
                    'np_train_loss': [], 'np_test_loss': [], 'np_val_loss': [], 'np_avg_loss': []}
         for epoch in range(self.config.num_epochs):
@@ -217,10 +216,10 @@ class ModelTrainer:
             avg_val_loss = val_loss / len(val_loader)
             avg_loss = (avg_train_loss + avg_test_loss) / 2
             
-            avg_np_train_loss = np_train_loss / len(train_loader)
-            avg_np_test_loss = np_test_loss / len(test_loader)
-            avg_np_val_loss = np_val_loss / len(val_loader)
-            avg_np_loss = (avg_np_train_loss + avg_np_test_loss) / 2
+            # avg_np_train_loss = np_train_loss / len(train_loader)
+            # avg_np_test_loss = np_test_loss / len(test_loader)
+            # avg_np_val_loss = np_val_loss / len(val_loader)
+            # avg_np_loss = (avg_np_train_loss + avg_np_test_loss) / 2
             
             # Update history
             history['train_loss'].append(avg_train_loss)
@@ -228,10 +227,10 @@ class ModelTrainer:
             history['val_loss'].append(avg_val_loss)
             history['avg_loss'].append(avg_loss)
             
-            history['np_train_loss'].append(avg_np_train_loss)
-            history['np_test_loss'].append(avg_np_test_loss)
-            history['np_val_loss'].append(avg_np_val_loss)
-            history['np_avg_loss'].append(avg_np_loss)
+            # history['np_train_loss'].append(avg_np_train_loss)
+            # history['np_test_loss'].append(avg_np_test_loss)
+            # history['np_val_loss'].append(avg_np_val_loss)
+            # history['np_avg_loss'].append(avg_np_loss)
             
             # Use average loss for scheduler
             scheduler.step(avg_loss)
@@ -552,11 +551,11 @@ class Visualizer:
 def main():
     
     training_config = TrainingConfig(
-        batch_size=65,
-        num_epochs=100,
+        batch_size=96,
+        num_epochs=1000,
         learning_rate=0.00294,
         weight_decay=0.0001,
-        factor=0.3737,
+        factor=0.14,
         patience=14,
         delta = 0.000042,
         train_test_split=0.6,
@@ -566,10 +565,10 @@ def main():
     )
     
     MLP_Config = MLPConfig(
-        hidden_dim = 70,
-        num_layers = 3,
+        hidden_dim = 202,
+        num_layers = 4,
         dropout = 0.2,
-        activation = 'ReLU',
+        activation = 'LeakyReLU',
         # device = "mps" if torch.backends.mps.is_available() else "cpu",
         device = "cuda" if torch.cuda.is_available() else "cpu",
     )
@@ -617,19 +616,20 @@ def main():
     B = B.to(device)
     b = b.to(device)
     
-    model = MCD_NN(
+    model = EC_NN(
         config = MLP_Config,
         input_dim=X_train.shape[1],
         output_dim=y_train.shape[1],
-        num_samples = 1000,
         A = A,
         B = B,
         b = b,
+        dependent_ids=[2],
+        num_samples = None
     )
     
     from mv_gaussian_nll import GaussianMVNLL
-    # criterion = GaussianMVNLL()
-    criterion = nn.MSELoss()
+    criterion = GaussianMVNLL()
+    # criterion = nn.MSELoss()
     
     trainer = ModelTrainer(model, training_config)
     model, history, avg_loss = trainer.train(X_train, y_train, X_test, y_test, X_val, y_val, criterion)
@@ -640,22 +640,89 @@ def main():
     noiseless_features = noiseless_features.reshape(num_simulations, -1, X_tensor.shape[2])
     
     model.eval()
-    model.enable_dropout()
+    # model.enable_dropout()
     feature_names = ['ca', 'cb', 'cc', 'temp']
     simulations = {}
     simulations = {i: None for i in range(X_tensor.shape[0])}
     np_simulations = {}
     np_simulations = {i: None for i in range(X_tensor.shape[0])}
-    for i in range (X_tensor.shape[0]):
-        with torch.no_grad():        
-            prj_preds, nprj_preds = model(X_tensor[i, :, :].to(training_config.device))
-            simulations[i] = prj_preds.cpu().numpy()
-            np_simulations[i] = nprj_preds.cpu().numpy()
+    # for i in range (X_tensor.shape[0]):
+    #     with torch.no_grad():
+    #         prj_preds, nprj_preds = model(X_tensor[i, :, :].to(training_config.device))
+    #         simulations[i] = prj_preds.cpu().numpy()
+    #         np_simulations[i] = nprj_preds.cpu().numpy()
+            
+    for i in range(X_tensor.shape[0]):
+        with torch.no_grad():
+            ecnn_preds, ecnn_covs = model(X_tensor[i, :, :].to(training_config.device))
+            ecnn_preds = ecnn_preds.cpu().numpy()
+            ecnn_covs = ecnn_covs.cpu().numpy()
+            simulations[i] = (ecnn_preds, ecnn_covs)
+            
+    # Plot the trajectory for each simulation
+    for sim_idx in range(len(simulations)):
+        preds, covs = simulations[sim_idx]
+        
+        # Inverse transform if needed
+        preds = data_processor.target_scaler.inverse_transform(preds)
+        
+        scale_factor = data_processor.target_scaler.data_max_ - data_processor.target_scaler.data_min_
+        stds = np.sqrt(np.diagonal(covs, axis1=1, axis2=2) * (scale_factor**2))
+        
+
+        plt.figure(figsize=(15, 10))
+        plt.suptitle(f'Simulation {sim_idx+1}', fontsize=16)
+        
+        for i in range(preds.shape[1]):
+            plt.subplot(math.ceil(preds.shape[1]/2), 2, i+1)
+            
+            # Plot ground truth data
+            plt.plot(noisy_targets[sim_idx, :, i], label='Noisy Data', color='green')
+            plt.plot(noiseless_targets[sim_idx, :, i], label='Noiseless Data', color='black', linestyle='dashed')
+            
+            # Plot predictions with uncertainty
+            time_steps = range(len(preds))
+            plt.plot(preds[:, i], label=f'ECNN {feature_names[i]}', color='blue')
+            plt.fill_between(time_steps, 
+                           preds[:, i] - 1.8*stds[:, i],
+                           preds[:, i] + 1.8*stds[:, i],
+                           color='blue', alpha=0.2, label=f'{feature_names[i]} Uncertainty')
+            
+            plt.title(f'{feature_names[i]} Trajectory')
+            plt.xlabel('Time step')
+            plt.ylabel(f'{feature_names[i]} value')
+            plt.legend()
+            
+        plt.tight_layout()
+        plt.show()
+        
+        # Plot constraint violation
+        constraint = np.zeros((preds.shape[0], 1))
+        constraint_true = np.zeros((preds.shape[0], 1))
+        
+        for i in range(preds.shape[0]):
+            constraint[i] = A.cpu().numpy() @ noiseless_features[sim_idx, i, :] + B.cpu().numpy() @ preds[i, :] - b.cpu().numpy()
+            constraint_true[i] = A.cpu().numpy() @ noiseless_features[sim_idx, i, :] + B.cpu().numpy() @ noiseless_targets[sim_idx, i, :] - b.cpu().numpy()
+        
+        plt.figure(figsize=(15, 6))
+        plt.title(f'Constraint Violation - Simulation {sim_idx+1}')
+        plt.plot(constraint, label='ECNN Model')
+        plt.axhline(0, color='black', linestyle='dashed', label='Zero Violation')
+        plt.plot(constraint_true, label='True Data', linestyle='dashed', color='green')
+        plt.xlabel('Time step')
+        plt.ylabel('Constraint Violation')
+        plt.legend()
+        plt.show()
+
+
 
     # Plot for all simulations
     plt.figure(figsize=(15, 10))
 
     # plot the error distribution
+    ######### MC Dropout Plots ###########
+    
+    
     
     # for j in range(simulation_1.shape[1]):
         # simulation_1[:, j, :] = data_processor.target_scaler.inverse_transform(simulation_1[:, j, :])
@@ -676,73 +743,73 @@ def main():
     #     plt.show()
 
     # Plot the trajectory of all simulations
-    for sim_idx in range(len(simulations)):
-        simulation = simulations[sim_idx]
-        np_simulation = np_simulations[sim_idx]
+    # for sim_idx in range(len(simulations)):
+    #     simulation = simulations[sim_idx]
+    #     # np_simulation = np_simulations[sim_idx]
         
-        for j in range(simulation.shape[1]):
-            simulation[:, j, :] = data_processor.target_scaler.inverse_transform(simulation[:, j, :])
-            np_simulation[:, j, :] = data_processor.target_scaler.inverse_transform(np_simulation[:, j, :])
+    #     for j in range(simulation.shape[1]):
+    #         simulation[:, j, :] = data_processor.target_scaler.inverse_transform(simulation[:, j, :])
+    #         np_simulation[:, j, :] = data_processor.target_scaler.inverse_transform(np_simulation[:, j, :])
         
-        sim_mean = simulation.mean(axis=0) if hasattr(simulation, 'mean') else simulation
-        sim_std = simulation.std(axis=0) if hasattr(simulation, 'std') else np.zeros_like(sim_mean)
-        np_sim_mean = np_simulation.mean(axis=0) if hasattr(np_simulation, 'mean') else np_simulation
-        np_sim_std = np_simulation.std(axis=0) if hasattr(np_simulation, 'std') else np.zeros_like(np_sim_mean)
+    #     sim_mean = simulation.mean(axis=0) if hasattr(simulation, 'mean') else simulation
+    #     sim_std = simulation.std(axis=0) if hasattr(simulation, 'std') else np.zeros_like(sim_mean)
+    #     np_sim_mean = np_simulation.mean(axis=0) if hasattr(np_simulation, 'mean') else np_simulation
+    #     np_sim_std = np_simulation.std(axis=0) if hasattr(np_simulation, 'std') else np.zeros_like(np_sim_mean)
         
-        plt.figure(figsize=(15, 10))
-        plt.suptitle(f'Simulation {sim_idx+1}', fontsize=16)
-        for i in range(sim_mean.shape[1]):
-            plt.subplot(math.ceil(sim_mean.shape[1]/2), 2, i+1)
+    #     plt.figure(figsize=(15, 10))
+    #     plt.suptitle(f'Simulation {sim_idx+1}', fontsize=16)
+    #     for i in range(sim_mean.shape[1]):
+    #         plt.subplot(math.ceil(sim_mean.shape[1]/2), 2, i+1)
             
-            # Plot ground truth data
-            plt.plot(noisy_targets[sim_idx, :, i], label='Noisy Data', color='green')
-            plt.plot(noiseless_targets[sim_idx, :, i], label='Noiseless Data', color='black', linestyle='dashed')
+    #         # Plot ground truth data
+    #         plt.plot(noisy_targets[sim_idx, :, i], label='Noisy Data', color='green')
+    #         plt.plot(noiseless_targets[sim_idx, :, i], label='Noiseless Data', color='black', linestyle='dashed')
             
-            # Plot projected predictions with uncertainty
-            time_steps = range(len(sim_mean))
-            plt.plot(sim_mean[:, i], label=feature_names[i], color='blue')
-            plt.fill_between(time_steps, 
-                             sim_mean[:, i] - 2*sim_std[:, i],
-                             sim_mean[:, i] + 2*sim_std[:, i],
-                             color='blue', alpha=0.2, label=f'{feature_names[i]} Uncertainty')
+    #         # Plot projected predictions with uncertainty
+    #         time_steps = range(len(sim_mean))
+    #         plt.plot(sim_mean[:, i], label=feature_names[i], color='blue')
+    #         plt.fill_between(time_steps, 
+    #                          sim_mean[:, i] - 2*sim_std[:, i],
+    #                          sim_mean[:, i] + 2*sim_std[:, i],
+    #                          color='blue', alpha=0.2, label=f'{feature_names[i]} Uncertainty')
             
-            # Plot non-projected predictions with uncertainty
-            plt.plot(np_sim_mean[:, i], label=f'Non-Projected {feature_names[i]}', 
-                     linestyle='dashed', color='red')
-            plt.fill_between(time_steps,
-                             np_sim_mean[:, i] - 2*np_sim_std[:, i],
-                             np_sim_mean[:, i] + 2*np_sim_std[:, i],
-                             color='red', alpha=0.2, label=f'Non-Projected Uncertainty')
+    #         # Plot non-projected predictions with uncertainty
+    #         plt.plot(np_sim_mean[:, i], label=f'Non-Projected {feature_names[i]}', 
+    #                  linestyle='dashed', color='red')
+    #         plt.fill_between(time_steps,
+    #                          np_sim_mean[:, i] - 2*np_sim_std[:, i],
+    #                          np_sim_mean[:, i] + 2*np_sim_std[:, i],
+    #                          color='red', alpha=0.2, label=f'Non-Projected Uncertainty')
             
-            plt.title(f'Mean and Uncertainty of {feature_names[i]}')
-            plt.xlabel('Time step')
-            plt.ylabel(f'{feature_names[i]} value')
-            plt.legend()
-        plt.tight_layout()
-        plt.show()
+    #         plt.title(f'Mean and Uncertainty of {feature_names[i]}')
+    #         plt.xlabel('Time step')
+    #         plt.ylabel(f'{feature_names[i]} value')
+    #         plt.legend()
+    #     plt.tight_layout()
+    #     plt.show()
         
-        # Plot constraint violation for each simulation
-        constraint = np.zeros((sim_mean.shape[0], 1))
-        unprojected_constraint = np.zeros((sim_mean.shape[0], 1))
-        constraint_true = np.zeros((sim_mean.shape[0], 1))
+    #     # Plot constraint violation for each simulation
+    #     constraint = np.zeros((sim_mean.shape[0], 1))
+    #     unprojected_constraint = np.zeros((sim_mean.shape[0], 1))
+    #     constraint_true = np.zeros((sim_mean.shape[0], 1))
         
-        for i in range(sim_mean.shape[0]):
-            constraint[i] = A.cpu().numpy() @ noiseless_features[sim_idx, i, :] + B.cpu().numpy() @ sim_mean[i, :] - b.cpu().numpy()
-            unprojected_constraint[i] = A.cpu().numpy() @ noiseless_features[sim_idx, i, :] + B.cpu().numpy() @ np_sim_mean[i, :] - b.cpu().numpy()
-            constraint_true[i] = A.cpu().numpy() @ noiseless_features[sim_idx, i, :] + B.cpu().numpy() @ noiseless_targets[sim_idx, i, :] - b.cpu().numpy()
+    #     for i in range(sim_mean.shape[0]):
+    #         constraint[i] = A.cpu().numpy() @ noiseless_features[sim_idx, i, :] + B.cpu().numpy() @ sim_mean[i, :] - b.cpu().numpy()
+    #         unprojected_constraint[i] = A.cpu().numpy() @ noiseless_features[sim_idx, i, :] + B.cpu().numpy() @ np_sim_mean[i, :] - b.cpu().numpy()
+    #         constraint_true[i] = A.cpu().numpy() @ noiseless_features[sim_idx, i, :] + B.cpu().numpy() @ noiseless_targets[sim_idx, i, :] - b.cpu().numpy()
         
-        plt.figure(figsize=(15, 6))
-        plt.title(f'Constraint Violation - Simulation {sim_idx+1}')
-        plt.plot(constraint, label='Projected Model')
-        plt.plot(unprojected_constraint, label='Non-Projected Model', linestyle='dashed')
-        plt.axhline(0, color='black', linestyle='dashed', label='Zero Violation')
-        plt.plot(constraint_true, label='True Data', linestyle='dashed', color='green')
-        plt.xlabel('Time step')
-        plt.ylabel('Constraint Violation')
-        plt.legend()
-        plt.show()
+    #     plt.figure(figsize=(15, 6))
+    #     plt.title(f'Constraint Violation - Simulation {sim_idx+1}')
+    #     plt.plot(constraint, label='Projected Model')
+    #     plt.plot(unprojected_constraint, label='Non-Projected Model', linestyle='dashed')
+    #     plt.axhline(0, color='black', linestyle='dashed', label='Zero Violation')
+    #     plt.plot(constraint_true, label='True Data', linestyle='dashed', color='green')
+    #     plt.xlabel('Time step')
+    #     plt.ylabel('Constraint Violation')
+    #     plt.legend()
+    #     plt.show()
 
-    # Plot the loss history
+    # # Plot the loss history
     action_names = ['inlet temp', 'feed conc', 'coolant temp']
     visualizer = Visualizer()
 
