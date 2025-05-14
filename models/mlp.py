@@ -7,22 +7,26 @@ activations = ["ReLU", "Softplus", "Tanh", "SELU", "LeakyReLU", "Sigmoid", "Soft
 class MLP(BaseModel):
     """Unified MLP implementation supporting multiple uncertainty estimation methods"""
     def __init__(self, config: MLPConfig, input_dim: int, output_dim: int,
-                 horizon: int):
+                 num_samples: Optional[int] = None):
         """Initialize MLP model with various uncertainty estimation capabilities
         
         Args:
             config: MLPConfig object containing model parameters
             input_dim: Input dimension: Number of features x time horizon
             output_dim: Output dimension
-            horizon: Prediction horizon
-            quantiles: List of quantiles for quantile regression
-            monte_carlo: Whether to use Monte Carlo dropout
-            var: Whether to estimate variance (for NLL loss)
+            num_samples: Optional[int]: Number of samples for Monte Carlo Dropout, if None defaults to outputting covariance matrix
         """
         super().__init__(config)
         self.input_dim = input_dim
         self.output_dim = output_dim
-        self.horizon = horizon
+        self.num_samples = num_samples
+        
+        self.gnll = False
+        # If we aren't using samples, we need to use the gnll and hence output covariance
+        if self.num_samples is None:
+            self.gnll = True
+            
+
             
         # Validate activation function
         assert config.activation in activations, "Activation function not supported"
@@ -52,15 +56,29 @@ class MLP(BaseModel):
         self.layers = nn.Sequential(*layers)
         
         # Output layers for mean prediction
-        self.fc = nn.Linear(current_dim, self.output_dim * self.horizon)
+        self.fc = nn.Linear(current_dim, self.output_dim)
         
         # Lower triangular Cholesky factor raw values
         # We only need n*(n+1)/2 values for the lower triangular part
-        n = self.output_dim
-        self.cholesky_size = n * (n + 1) // 2
-        self.fc_cholesky = nn.Linear(current_dim, self.cholesky_size * self.horizon)
+        if self.gnll:
+            n = self.output_dim
+            self.cholesky_size = n * (n + 1) // 2
+            self.fc_cholesky = nn.Linear(current_dim, self.cholesky_size)
+            
+        if self.num_samples is not None:
+            self.dropout_layers = []
+            for module in self.modules():
+                if isinstance(module, nn.Dropout):
+                    self.dropout_layers.append(module)
+                    
+    def enable_dropout(self):
+        """
+        Enable dropout layers
+        """
+        for module in self.dropout_layers:
+            module.train()
                 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor, num_samples: int = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Forward pass returning mean predictions and covariance matrices
         
@@ -72,48 +90,52 @@ class MLP(BaseModel):
             means: Tensor of shape (batch_size, horizon, output_dim)
             covariances: Tensor of shape (batch_size, horizon, output_dim, output_dim)
         """
-        batch_size = x.size(0)
+        if num_samples is None:
+            num_samples = self.num_samples
+            
+        if self.training or num_samples == None:
+            # Standard forward pass
+            batch_size = x.shape[0]
+            input_x = x
+            x = self.layers(x)
+            out = self.fc(x) #independent variable
+            
+            
+            # if self.gnll then we return the covariance matrix
+            if self.gnll:    
+                # get the 
+                cholesky_values = self.fc_cholesky(x)
+                # reconstruct the covariance matrix
+                n = self.output_dim
+            
+                # Create an empty tensor for our lower triangular matrices
+                L = torch.zeros(batch_size, n, n, device=x.device)
         
-        # Reshape to deal with batching
-        x = x.view(batch_size, -1)
-        x = self.layers(x)
+                # Convert the flat cholesky values to lower triangular matrices
+                for b in range(batch_size):
+                    idx = 0
+                    for i in range(n):
+                        for j in range(i + 1):
+                            if i == j:
+                                # Diagonal elements must be positive for a valid Cholesky factor
+                                # Using softplus to ensure positivity
+                                L[b, i, j] = F.softplus(cholesky_values[b, idx]) + 1e-6
+                            else:
+                                # Off-diagonal elements can be any value
+                                L[b, i, j] = cholesky_values[b, idx]
+                            idx += 1
+                
 
-        # Get mean predictions
-        means = self.fc(x).view(batch_size, self.horizon, self.output_dim)
-        
-        # Get Cholesky factor values
-        cholesky_values = self.fc_cholesky(x)
-        
-        # Convert to lower triangular matrices
-        n = self.output_dim
-        L = torch.zeros(batch_size, self.horizon * n, self.horizon * n, device=x.device)
-        
-        # Fill in the lower triangular part with the raw values
-        for b in range(batch_size):
-            for h in range(self.horizon):
-                start_idx = h * self.cholesky_size
-                end_idx = (h + 1) * self.cholesky_size
-                
-                # Extract cholesky values for this horizon step
-                step_values = cholesky_values[b, start_idx:end_idx]
-                
-                idx = 0
-                for i in range(n):
-                    for j in range(i + 1):
-                        if i == j:
-                            # Diagonal elements must be positive for a valid Cholesky factor
-                            # Using softplus to ensure positivity
-                            L[b, h * n + i, h * n + j] = F.softplus(step_values[idx]) + 1e-6
-                        else:
-                            # Off-diagonal elements can be any value
-                            L[b, h * n + i, h * n + j] = step_values[idx]
-                        idx += 1
-        
-        # # Compute covariance matrices from Cholesky factors: Σ = L*L^T
-        # covariances = torch.matmul(L, L.transpose(-1, -2))
-        
-        # # Add small values to diagonal for numerical stability
-        # eye = torch.eye(n, device=x.device).unsqueeze(0).unsqueeze(0)
-        # covariances = covariances + 1e-6 * eye
-        
-        return means, L
+
+                return out, L
+            else: return out
+            
+        else:
+            out_samples = []
+            for _ in range(num_samples):
+                self.enable_dropout
+                x = self.layers(x)
+                out = self.fc(x)
+                out_samples.append()
+            return out_samples
+            
