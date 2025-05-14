@@ -11,8 +11,8 @@ class GaussianMVNLL(nn.Module):
         """Vectorized implementation of multivariate Gaussian NLL"""
         batch_size, n_features = means.shape
         
-        # covs = torch.matmul(L, L.transpose(-1, -2))  # Compute covariance matrices
-        covs = L
+        covs = torch.matmul(L, L.transpose(-1, -2))  # Compute covariance matrices
+        # covs = L
         
         # Reshape means and targets for vectorized operations
         means_flat = means.reshape(-1, n_features) 
