@@ -179,14 +179,15 @@ class EC_NN(BaseModel):
                 # Create the full covariance matrix using slicing
                 # Initialize with zeros
                 full_cov = torch.zeros(batch_size, ny, ny, dtype=cov.dtype, device=cov.device)
-
                 # Place the diagonal blocks
                 full_cov[:, :ny_m, :ny_m] = cov      # Top-left block
                 full_cov[:, ny_m:, ny_m:] = cov_dep  # Bottom-right block
 
-                # Now full_cov has shape [batch_size, Ny, Ny] and is block diagonal
+                # Pass the cholesky decomposition to the loss function              
+                L = torch.linalg.cholesky(full_cov)
+                
 
-                return y, full_cov
+                return y, L
             
             else:
                 return torch.stack([indep_y, dep_y], dim=0)
