@@ -248,77 +248,6 @@ class ModelTrainer:
                 
         return self.model, history, avg_loss        
 
-    def train_sim(self, X_train, y_train, X_test, y_test, X_val, y_val, criterion):
-        
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.learning_rate, weight_decay = self.config.weight_decay)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=self.config.factor, patience=self.config.patience, verbose=True)
-        early_stopping = EarlyStopping(self.config)
-        history = {'train_loss': [], 'test_loss': [], 'val_loss': [], 'avg_loss': []}
-        for epoch in range(self.config.num_epochs):
-            # Training
-            self.model.train()
-            
-            for i in range(X_train.shape[0]):
-                X_sim = X_train[i].to(self.device)
-                y_sim = y_train[i].to(self.device)
-                train_dataset = TensorDataset(X_sim, y_sim)
-                train_loader = DataLoader(train_dataset, batch_size=self.config.batch_size, shuffle=True)
-                if criterion.__class__.__name__ == 'GaussianMVNLL':
-                    train_loss = self._NLL_train_epoch(train_loader, criterion, optimizer)
-                else:
-                    train_loss = self._train_epoch(train_loader, criterion, optimizer)
-                
-            # Validation
-            self.model.eval()
-            self.model.enable_dropout()
-            for i in range(X_test.shape[0]):
-                X_test_sim = X_test[i].to(self.device)
-                y_test_sim = y_test[i].to(self.device)
-                
-                test_dataset = TensorDataset(X_test_sim, y_test_sim)
-                test_loader = DataLoader(test_dataset, batch_size=self.config.batch_size, shuffle=False)
-                
-                X_val_sim = X_val[i].to(self.device)
-                y_val_sim = y_val[i].to(self.device)
-                
-                val_dataset = TensorDataset(X_val_sim, y_val_sim)
-                val_loader = DataLoader(val_dataset, batch_size=self.config.batch_size, shuffle=False)
-                
-                if criterion.__class__.__name__ == 'GaussianMVNLL':
-                    test_loss = self._NLL_validate_epoch(test_loader, criterion)
-                    val_loss = self._NLL_validate_epoch(val_loader, criterion)
-                else:
-                    test_loss = self._validate_epoch(test_loader, criterion)
-                    val_loss = self._validate_epoch(val_loader, criterion)
-
-            
-            # Calculate average losses
-            avg_train_loss = train_loss / len(train_loader)
-            avg_test_loss = test_loss / len(test_loader)
-            avg_val_loss = val_loss / len(val_loader)
-            avg_loss = (avg_train_loss + avg_test_loss) / 2
-            
-            # Update history
-            history['train_loss'].append(avg_train_loss)
-            history['test_loss'].append(avg_test_loss)
-            history['val_loss'].append(avg_val_loss)
-            history['avg_loss'].append(avg_loss)
-            
-            # Use average loss for scheduler
-            scheduler.step(avg_loss)
-            
-            print(f'Epoch [{epoch+1}/{self.config.num_epochs}], '
-                f'Train Loss: {avg_train_loss:.4f}, Test Loss: {avg_test_loss:.4f}, ' 
-                f'Val Loss: {avg_val_loss:.4f}'
-                f'Avg Loss: {avg_loss:.4f}')
-            
-            early_stopping(avg_loss, self.model)  # Use average loss for early stopping
-            if early_stopping.early_stop:
-                print("Early Stopping")
-                break
-            early_stopping.load_best_model(self.model)
-                
-        return self.model, history, avg_loss
     
     def _train_epoch(self, train_loader: DataLoader, criterion: nn.Module, 
                     optimizer: torch.optim.Optimizer) -> float:
@@ -552,7 +481,7 @@ def main():
     
     training_config = TrainingConfig(
         batch_size=96,
-        num_epochs=1000,
+        num_epochs=100,
         learning_rate=0.00294,
         weight_decay=0.0001,
         factor=0.14,
@@ -565,10 +494,10 @@ def main():
     )
     
     MLP_Config = MLPConfig(
-        hidden_dim = 202,
-        num_layers = 4,
+        hidden_dim = 128,
+        num_layers = 2,
         dropout = 0.2,
-        activation = 'LeakyReLU',
+        activation = 'ReLU',
         # device = "mps" if torch.backends.mps.is_available() else "cpu",
         device = "cuda" if torch.cuda.is_available() else "cpu",
     )
@@ -626,6 +555,17 @@ def main():
         dependent_ids=[2],
         num_samples = None
     )
+    
+    # model = MCD_NN(
+    #     config = MLP_Config,
+    #     input_dim=X_train.shape[1],
+    #     output_dim=y_train.shape[1],
+    #     A = A,
+    #     B = B,
+    #     b = b,
+    #     dependent_ids=[2],
+    #     num_samples = 100
+    # )
     
     from mv_gaussian_nll import GaussianMVNLL
     criterion = GaussianMVNLL()
