@@ -37,8 +37,8 @@ def objective(trial, training_config: TrainingConfig, model_config: MLPConfig,
     # Model configuration
     model_config.hidden_dim = trial.suggest_int("hidden_dim", 32, 4096)
     model_config.num_layers = trial.suggest_int("num_layers", 1, 15)
-    model_config.activation = trial.suggest_categorical("activation", ["ReLU", "LeakyReLU", "Tanh", "Softplus"])
-    
+    # model_config.activation = trial.suggest_categorical("activation", ["ReLU", "LeakyReLU", "Tanh", "Softplus"])
+    model_config.activation = trial.suggest_categorical("activation", ["ReLU"])
     device = model_config.device
 
     X_train = X_train.to(device)
@@ -74,7 +74,7 @@ def objective(trial, training_config: TrainingConfig, model_config: MLPConfig,
 def run_optimization():
     training_config = TrainingConfig(
         batch_size=64,
-        num_epochs=150,
+        num_epochs=10,
         learning_rate=0.001,
         weight_decay=0.0001,
         factor=0.1,
