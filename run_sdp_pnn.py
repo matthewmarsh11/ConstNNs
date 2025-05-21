@@ -2,12 +2,13 @@ from utils_new import *
 from models.mlp import *
 from models.mcd_nn import *
 from models.ec_nn import *
+from models.sdp_pnn import *
 from base import *
 
 def main():
     
     training_config = TrainingConfig(
-        batch_size=551,
+        batch_size=15,
         num_epochs=100,
         learning_rate=0.0003312885933252439,
         weight_decay=0.0004866958134234954,
@@ -72,16 +73,17 @@ def main():
     B = B.to(device)
     b = b.to(device)
     
-    model = EC_NN(
+    model = SDP_PNN(
         config = MLP_Config,
-        input_dim=X_train.shape[1],
-        output_dim=y_train.shape[1],
+        input_dim = X_train.shape[1],
+        output_dim = y_train.shape[1],
         A = A,
         B = B,
         b = b,
-        dependent_ids=[2],
-        num_samples = None
-    )
+        epsilon = 0.05,
+        probability_level = 0.95
+        )
+        
     
     
     from mv_gaussian_nll import GaussianMVNLL
