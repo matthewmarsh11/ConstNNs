@@ -168,7 +168,7 @@ class CSTRSimulator():
         disturbance_space = {'low': np.array([250, 0]), 'high': np.array([450, 1])}
         
         # Create LHS sampler for both temperature and concentration
-        sampler = qmc.LatinHypercube(d=2)
+        sampler = qmc.LatinHypercube(d=len(disturbance_space['low']))
         
         # Generate base nominal values using LHS
         max_disturbances = self.config.T // 4  # Maximum number of possible changes
