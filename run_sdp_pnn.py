@@ -22,8 +22,8 @@ def main():
     )
     
     MLP_Config = MLPConfig(
-        hidden_dim = 3719,
-        num_layers = 12,
+        hidden_dim = 500,
+        num_layers = 3,
         dropout = 0.2,
         activation = 'ReLU',
         # device = "mps" if torch.backends.mps.is_available() else "cpu",
@@ -134,7 +134,7 @@ def main():
             
             # Plot predictions with uncertainty
             time_steps = range(len(preds))
-            plt.plot(preds[:, i], label=f'ECNN {feature_names[i]}', color='blue')
+            plt.plot(preds[:, i], label=f'SDP_NN {feature_names[i]}', color='blue')
             plt.fill_between(time_steps, 
                            preds[:, i] - 1.8*stds[:, i],
                            preds[:, i] + 1.8*stds[:, i],
