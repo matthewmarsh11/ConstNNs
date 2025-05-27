@@ -178,7 +178,7 @@ class ModelTrainer:
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=self.config.factor, patience=self.config.patience)
         early_stopping = EarlyStopping(self.config)
         history = {'train_loss': [], 'test_loss': [], 'val_loss': [], 'avg_loss': [],
-                   'np_train_loss': [], 'np_test_loss': [], 'np_val_loss': [], 'np_avg_loss': []}
+                   }
         for epoch in range(self.config.num_epochs):
             # Training
             self.model.train()
@@ -190,9 +190,9 @@ class ModelTrainer:
             train_dataset = TensorDataset(X_train, y_train)
             train_loader = DataLoader(train_dataset, batch_size=self.config.batch_size, shuffle=True, num_workers=num_workers, pin_memory=use_pin_memory)
             if criterion.__class__.__name__ == 'GaussianMVNLL':
-                train_loss, np_train_loss = self._NLL_train_epoch(train_loader, criterion, optimizer)
+                train_loss = self._NLL_train_epoch(train_loader, criterion, optimizer)
             else:
-                train_loss, np_train_loss = self._train_epoch(train_loader, criterion, optimizer)
+                train_loss = self._train_epoch(train_loader, criterion, optimizer)
                 
             # Validation
             self.model.eval()
@@ -203,23 +203,20 @@ class ModelTrainer:
             val_loader = DataLoader(val_dataset, batch_size=self.config.batch_size, shuffle=False, num_workers=num_workers, pin_memory=use_pin_memory)
             
             if criterion.__class__.__name__ == 'GaussianMVNLL':
-                test_loss, np_test_loss = self._NLL_validate_epoch(test_loader, criterion)
-                val_loss, np_val_loss = self._NLL_validate_epoch(val_loader, criterion)
+                test_loss = self._NLL_validate_epoch(test_loader, criterion)
+                val_loss = self._NLL_validate_epoch(val_loader, criterion)
             else:
-                test_loss, np_test_loss = self._validate_epoch(test_loader, criterion)
-                val_loss, np_val_loss = self._validate_epoch(val_loader, criterion)
+                test_loss = self._validate_epoch(test_loader, criterion)
+                val_loss = self._validate_epoch(val_loader, criterion)
 
             
-            # Calculate average losses
+            # # Calculate average losses
             avg_train_loss = train_loss / len(train_loader)
             avg_test_loss = test_loss / len(test_loader)
             avg_val_loss = val_loss / len(val_loader)
             avg_loss = (avg_train_loss + avg_test_loss) / 2
+        
             
-            avg_np_train_loss = np_train_loss / len(train_loader)
-            avg_np_test_loss = np_test_loss / len(test_loader)
-            avg_np_val_loss = np_val_loss / len(val_loader)
-            avg_np_loss = (avg_np_train_loss + avg_np_test_loss) / 2
             
             # Update history
             history['train_loss'].append(avg_train_loss)
@@ -227,10 +224,6 @@ class ModelTrainer:
             history['val_loss'].append(avg_val_loss)
             history['avg_loss'].append(avg_loss)
             
-            history['np_train_loss'].append(avg_np_train_loss)
-            history['np_test_loss'].append(avg_np_test_loss)
-            history['np_val_loss'].append(avg_np_val_loss)
-            history['np_avg_loss'].append(avg_np_loss)
             
             # Use average loss for scheduler
             scheduler.step(avg_loss)
@@ -240,11 +233,11 @@ class ModelTrainer:
                 f'Val Loss: {avg_val_loss:.4f}'
                 f'Avg Loss: {avg_loss:.4f}')
             
-            early_stopping(avg_loss, self.model)  # Use average loss for early stopping
-            if early_stopping.early_stop:
-                print("Early Stopping")
-                break
-            early_stopping.load_best_model(self.model)
+            # early_stopping(avg_val_loss, self.model)  # Use average loss for early stopping
+            # if early_stopping.early_stop:
+            #     print("Early Stopping")
+            #     break
+            # early_stopping.load_best_model(self.model)
                 
         return self.model, history, avg_loss        
 
@@ -252,60 +245,48 @@ class ModelTrainer:
     def _train_epoch(self, train_loader: DataLoader, criterion: nn.Module, 
                     optimizer: torch.optim.Optimizer) -> float:
         total_loss = 0
-        np_total_loss = 0
         for batch_X, batch_y in train_loader:
             batch_X, batch_y = batch_X.to(self.device), batch_y.to(self.device)
             optimizer.zero_grad()
-            predictions, np_preds = self.model(batch_X)
+            predictions = self.model(batch_X)
             loss = criterion(predictions, batch_y)
-            np_loss = criterion(np_preds, batch_y)
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
-            np_total_loss += np_loss.item()
-        return total_loss, np_total_loss
+        return total_loss
     
     def _NLL_train_epoch(self, train_loader: DataLoader, criterion: nn.Module,
                         optimizer: torch.optim.Optimizer) -> float:
         total_loss = 0
-        np_total_loss = 0
         for batch_X, batch_y in train_loader:
             batch_X, batch_y = batch_X.to(self.device), batch_y.to(self.device)
             optimizer.zero_grad()
-            mean, var, np_mean, np_var = self.model(batch_X)
+            mean, var = self.model(batch_X)
             loss = criterion(mean, batch_y, var)
-            np_loss = criterion(np_mean, batch_y, np_var)
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
-            np_total_loss += np_loss.item()
-        return total_loss, np_total_loss
+        return total_loss
     
     def _validate_epoch(self, test_loader: DataLoader, criterion: nn.Module) -> float:
         total_loss = 0
-        np_total_loss = 0
         with torch.no_grad():
             for batch_X, batch_y in test_loader:
                 batch_X, batch_y = batch_X.to(self.device), batch_y.to(self.device)
-                predictions, np_preds = self.model(batch_X)
+                predictions = self.model(batch_X)
                 loss = criterion(predictions, batch_y)
-                np_loss = criterion(np_preds, batch_y)
-                total_loss += loss.item()
-                np_total_loss += np_loss.item()
-        return total_loss, np_total_loss
+                total_loss += loss.item() * batch_X.shape[0] # Scale loss by batch size
+        return total_loss
 
     def _NLL_validate_epoch(self, test_loader: DataLoader, criterion: nn.Module) -> float:
         total_loss = 0
-        np_total_loss = 0
         with torch.no_grad():
             for batch_X, batch_y in test_loader:
                 batch_X, batch_y = batch_X.to(self.device), batch_y.to(self.device)
-                mean, var, np_mean, np_var = self.model(batch_X)
+                mean, var = self.model(batch_X)
                 loss = criterion(mean, batch_y, var)
-                np_loss = criterion(np_mean, batch_y, np_var)
                 total_loss += loss.item()
-                np_total_loss += np_loss.item()
-        return total_loss, np_total_loss
+        return total_loss
 
 class Visualizer:
     """Handles visualization of results."""
