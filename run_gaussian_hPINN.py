@@ -10,12 +10,12 @@ def main():
     
     training_config = TrainingConfig(
         batch_size=15,
-        num_epochs=100,
+        num_epochs=1000,
         learning_rate=0.0003312885933252439,
         weight_decay=0.0004866958134234954,
         factor=0.35437977494490497,
-        patience=14,
-        delta = 2.8644473515051556e-05,
+        patience=150,
+        delta = 0.0001,
         train_test_split=0.6,
         test_val_split=0.8,
         # device = "mps" if torch.backends.mps.is_available() else "cpu",
@@ -81,11 +81,16 @@ def main():
         A = A,
         B = B,
         b = b,
-        epsilon = 0.01,
+        epsilon = 0.0001,
         probability_level = 0.95
         )
         
-    
+    np_model = MLP(
+        config = MLP_Config,
+        input_dim = X_train.shape[1],
+        output_dim = y_train.shape[1],
+        num_samples=None,  # No dropout for non-projected model
+    )
     
     from mv_gaussian_nll import GaussianMVNLL
     criterion = GaussianMVNLL()
@@ -93,6 +98,9 @@ def main():
     
     trainer = ModelTrainer(model, training_config)
     model, history, avg_loss = trainer.train(X_train, y_train, X_test, y_test, X_val, y_val, criterion)
+    np_trainer = ModelTrainer(np_model, training_config)
+    np_model, np_history, np_avg_loss = np_trainer.train(X_train, y_train, X_test, y_test, X_val, y_val, criterion)
+    
     X_tensor = X_tensor.reshape(num_simulations, -1, X_tensor.shape[1])
     noisy_targets = targets.to_numpy().reshape(num_simulations, -1, y_tensor.shape[1])
     noiseless_targets = noiseless_targets.reshape(num_simulations, -1, y_tensor.shape[1])
@@ -100,26 +108,32 @@ def main():
     noiseless_features = noiseless_features.reshape(num_simulations, -1, X_tensor.shape[2])
     
     model.eval()
+    np_model.eval()
     # model.enable_dropout()
     feature_names = ['ca', 'cb', 'cc', 'temp']
     simulations = {}
     simulations = {i: None for i in range(X_tensor.shape[0])}
+    
+    np_simulations = {}
+    np_simulations = {i: None for i in range(X_tensor.shape[0])}
 
     for i in range(X_tensor.shape[0]):
         with torch.no_grad():
-            preds, covs, np_preds, np_covs = model(X_tensor[i, :, :].to(training_config.device))
+            preds, covs = model(X_tensor[i, :, :].to(training_config.device))
+            np_preds, np_covs = np_model(X_tensor[i, :, :].to(training_config.device))
             preds = preds.cpu().numpy()
             covs = torch.matmul(covs, covs.transpose(1, 2))
             covs = covs.cpu().numpy()
             np_preds = np_preds.cpu().numpy()
             np_covs = torch.matmul(np_covs, np_covs.transpose(1, 2))
             np_covs = np_covs.cpu().numpy()
-            simulations[i] = (preds, covs, np_preds, np_covs)
+            simulations[i] = (preds, covs)
+            np_simulations[i] = (np_preds, np_covs)
             
     # Plot the trajectory for each simulation
     for sim_idx in range(len(simulations)):
-        preds, covs, np_preds, np_covs = simulations[sim_idx]
-        
+        preds, covs = simulations[sim_idx]
+        np_preds, np_covs = np_simulations[sim_idx]
         # Inverse transform if needed
         preds = data_processor.target_scaler.inverse_transform(preds)
         np_preds = data_processor.target_scaler.inverse_transform(np_preds)
