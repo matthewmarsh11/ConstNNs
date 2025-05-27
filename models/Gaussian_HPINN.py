@@ -2,10 +2,8 @@ import torch
 import torch.nn as nn
 from typing import List, Tuple, Dict, Any, Union
 from base import *
-import cvxpy as cp
 from scipy.stats import chi2
 import numpy as np
-from cvxpylayers.torch import CvxpyLayer
 import scipy
 
 class KKT_PPINN(BaseModel):

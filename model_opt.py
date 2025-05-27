@@ -3,7 +3,7 @@ import torch.nn as nn
 import optuna
 from utils_new import *
 from models.mcd_nn import MCD_NN
-from models.sdp_pnn import SDP_PNN
+# from models.sdp_pnn import SDP_PNN
 from models.Gaussian_HPINN import KKT_PPINN
 from base import TrainingConfig, MLPConfig
 from optuna.trial import TrialState
