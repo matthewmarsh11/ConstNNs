@@ -140,19 +140,19 @@ class KKT_PPINN(BaseModel):
         # all together
         
         cov_out = cov - pr2 + bias
-        
+        eigs = torch.zeros(batch_size, self.output_dim, device=x.device)
         # Ensure covariance matrix is positive semi-definite
         for i in range(batch_size):
             L, Q = torch.linalg.eigh(cov_out[i])
         # Check if any eigenvalue is negative
             if torch.any(L.real < 0):
                 # If so, set it to zero
-                L = torch.clamp(L.real, min=0)
+                L = torch.clamp(L.real, min=10e-6)
             # Reconstruct the covariance matrix
             cov_out[i] = torch.matmul(Q, torch.matmul(torch.diag(L + 1e-6), Q.transpose(0, 1)))
-            
+            eigs[i] = torch.linalg.eigvalsh(cov_out[i])
         L_out = torch.linalg.cholesky(cov_out)
 
 
-        return mu_Q, L_out, mu, L_batch
+        return mu_Q, L_out
         
