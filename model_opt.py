@@ -3,6 +3,8 @@ import torch.nn as nn
 import optuna
 from utils_new import *
 from models.mcd_nn import MCD_NN
+from models.sdp_pnn import SDP_PNN
+from models.Gaussian_HPINN import KKT_PPINN
 from base import TrainingConfig, MLPConfig
 from optuna.trial import TrialState
 import multiprocessing
@@ -52,17 +54,16 @@ def objective(trial, training_config: TrainingConfig, model_config: MLPConfig,
     B = B.to(device)
     b = b.to(device)
     
-    model = EC_NN(
+    model = KKT_PPINN(
         config = model_config,
-        input_dim=X_train.shape[1],
-        output_dim=y_train.shape[1],
+        input_dim = X_train.shape[1],
+        output_dim = y_train.shape[1],
         A = A,
         B = B,
         b = b,
-        dependent_ids=[2],
-        num_samples = None
-    )
-    
+        epsilon = 0.05,
+        probability_level = 0.95
+        )
     
     # Create a trainer instance from the trainer class
     model_trainer = trainer_class(model, training_config)
@@ -74,7 +75,7 @@ def objective(trial, training_config: TrainingConfig, model_config: MLPConfig,
 def run_optimization():
     training_config = TrainingConfig(
         batch_size=64,
-        num_epochs=10,
+        num_epochs=100,
         learning_rate=0.001,
         weight_decay=0.0001,
         factor=0.1,
