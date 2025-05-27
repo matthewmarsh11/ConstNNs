@@ -5,7 +5,7 @@ from base import *
 import cvxpy as cp
 from scipy.stats import chi2
 import numpy as np
-from cvxpylayers.torch import CvxpyLayer
+# from cvxpylayers.torch import CvxpyLayer
 import scipy
 
 class SDP_PNN(BaseModel):
