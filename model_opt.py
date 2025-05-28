@@ -90,9 +90,9 @@ def run_optimization():
         device="cuda" if torch.cuda.is_available() else "cpu"
     )
 
-    features_path = 'datasets/cstr_features.csv'
-    targets_path = 'datasets/cstr_targets.csv'
-    noiseless_path = 'datasets/cstr_noiseless_results.csv'
+    features_path = 'datasets/small_cstr_features.csv'
+    targets_path = 'datasets/small_cstr_targets.csv'
+    noiseless_path = 'datasets/small_cstr_noiseless_results.csv'
 
     print(model_config.device)
 
@@ -104,7 +104,7 @@ def run_optimization():
     noiseless_results = noiseless_results.iloc[:, :-1]
     noiseless_targets = noiseless_results.iloc[:, :4].to_numpy()
     noiseless_features = noiseless_results.iloc[:, 4:].to_numpy()
-    num_simulations = 1000
+    num_simulations = 10
 
     data_processor = DataProcessor(training_config, features, targets, num_simulations)
     # Prepare data
