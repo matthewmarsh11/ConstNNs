@@ -7,13 +7,13 @@ from base import *
 def main():
     
     training_config = TrainingConfig(
-        batch_size=96,
-        num_epochs=16,
-        learning_rate=0.00294,
-        weight_decay=0.0001,
-        factor=0.14,
-        patience=14,
-        delta = 0.000042,
+        batch_size=92,
+        num_epochs=100,
+        learning_rate=3.266982523281954e-05,
+        weight_decay=1.0275474727234102e-05,
+        factor=0.2790682806199674,
+        patience=19,
+        delta = 0.0037385829906140906,
         train_test_split=0.6,
         test_val_split=0.8,
         # device = "mps" if torch.backends.mps.is_available() else "cpu",
@@ -21,26 +21,26 @@ def main():
     )
     
     MLP_Config = MLPConfig(
-        hidden_dim = 128,
-        num_layers = 2,
+        hidden_dim = 1212,
+        num_layers = 4,
         dropout = 0.2,
         activation = 'ReLU',
         # device = "mps" if torch.backends.mps.is_available() else "cpu",
         device = "cuda" if torch.cuda.is_available() else "cpu",
     )
     
-    features_path = 'datasets/small_cstr_features.csv'
-    targets_path = 'datasets/small_cstr_targets.csv'
-    noiseless_path = 'datasets/small_cstr_noiseless_results.csv'
+    features_path = 'datasets/tank_system_features.csv'
+    targets_path = 'datasets/tank_system_targets.csv'
+    noiseless_path = 'datasets/tank_system_noiseless_features.csv'
     
     features = pd.read_csv(features_path)
-    features = features.iloc[:, :-1]
-    targets = features.iloc[:, :4]
-    features = features.iloc[:, 4:]
+    features = features.drop('V1_s', axis=1)
+    targets = features[['V1', 'C1', 'V2', 'C2']]
+    features = features[['F_in1', 'F_in2']]
     noiseless_results = pd.read_csv(noiseless_path)
-    noiseless_results = noiseless_results.iloc[:, :-1]
-    noiseless_targets = noiseless_results.iloc[:, :4].to_numpy()
-    noiseless_features = noiseless_results.iloc[:, 4:].to_numpy()
+    noiseless_results = noiseless_results.drop('V1_s', axis=1)
+    noiseless_targets = noiseless_results[['V1', 'C1', 'V2', 'C2']].to_numpy()
+    noiseless_features = noiseless_results[['F_in1', 'F_in2']].to_numpy()
     num_simulations = 10
     
     data_processor = DataProcessor(training_config, features, targets, num_simulations)
@@ -55,9 +55,9 @@ def main():
     # y = [Caf, Cb, Cc, T]
     
     # Enforce mass balance: Cain = Ca + 2Cb + Cc
-    A = torch.Tensor([0 , -1 , 0])
-    B = torch.Tensor([1, 2, 1, 0])
-    b = torch.Tensor([0])
+    A = torch.Tensor([0, 0])
+    B = torch.Tensor([1, 0, 1, 0])
+    b = torch.Tensor([100])
     
     device = MLP_Config.device
 
@@ -92,7 +92,7 @@ def main():
     
     model.eval()
     # model.enable_dropout()
-    feature_names = ['ca', 'cb', 'cc', 'temp']
+    feature_names = ['V1', 'C1', 'V2', 'C2']
     simulations = {}
     simulations = {i: None for i in range(X_tensor.shape[0])}
     np_simulations = {}
@@ -133,7 +133,7 @@ def main():
             
             # Plot predictions with uncertainty
             time_steps = range(len(preds))
-            plt.plot(preds[:, i], label=f'ECNN {feature_names[i]}', color='blue')
+            plt.plot(preds[:, i], label=f'PNN {feature_names[i]}', color='blue')
             plt.fill_between(time_steps, 
                            preds[:, i] - 1.8*stds[:, i],
                            preds[:, i] + 1.8*stds[:, i],
