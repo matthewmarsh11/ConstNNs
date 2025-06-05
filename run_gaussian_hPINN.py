@@ -9,12 +9,12 @@ from base import *
 def main():
     
     training_config = TrainingConfig(
-        batch_size=15,
-        num_epochs=1000,
-        learning_rate=0.0003312885933252439,
-        weight_decay=0.0004866958134234954,
-        factor=0.35437977494490497,
-        patience=150,
+        batch_size=21,
+        num_epochs=100,
+        learning_rate=0.0004686825880910967,
+        weight_decay=0.003761781637604189,
+        factor=0.369045567244328,
+        patience=0.006806821916779027,
         delta = 0.0001,
         train_test_split=0.6,
         test_val_split=0.8,
@@ -23,27 +23,28 @@ def main():
     )
     
     MLP_Config = MLPConfig(
-        hidden_dim = 500,
-        num_layers = 3,
+        hidden_dim = 912,
+        num_layers = 6,
         dropout = 0.2,
         activation = 'ReLU',
         # device = "mps" if torch.backends.mps.is_available() else "cpu",
         device = "cuda" if torch.cuda.is_available() else "cpu",
     )
     
-    features_path = 'datasets/small_cstr_features.csv'
-    targets_path = 'datasets/small_cstr_targets.csv'
-    noiseless_path = 'datasets/small_cstr_noiseless_results.csv'
+    features_path = 'datasets/tank_system_features.csv'
+    targets_path = 'datasets/tank_system_targets.csv'
+    noiseless_path = 'datasets/tank_system_noiseless_features.csv'
     
     features = pd.read_csv(features_path)
-    features = features.iloc[:, :-1]
-    targets = features.iloc[:, :4]
-    features = features.iloc[:, 4:]
+    features = features.drop('V1_s', axis=1)
+    targets = features[['V1', 'C1', 'V2', 'C2']]
+    features = features[['F_in1', 'F_in2']]
     noiseless_results = pd.read_csv(noiseless_path)
-    noiseless_results = noiseless_results.iloc[:, :-1]
-    noiseless_targets = noiseless_results.iloc[:, :4].to_numpy()
-    noiseless_features = noiseless_results.iloc[:, 4:].to_numpy()
-    num_simulations = 10
+    noiseless_results = noiseless_results.drop('V1_s', axis=1)
+    noiseless_targets = noiseless_results[['V1', 'C1', 'V2', 'C2']].to_numpy()
+    noiseless_features = noiseless_results[['F_in1', 'F_in2']].to_numpy()
+    num_simulations = 100
+    
     
     data_processor = DataProcessor(training_config, features, targets, num_simulations)
     # Prepare data
@@ -54,36 +55,70 @@ def main():
     # of shape [simulations, time steps, features]
     
     # X = [Tin, Caf, Tc]
-    # y = [Caf, Cb, Cc, T]
+    # y = [Ca, Cb, Cc, T]
+    # Ax + By = b
+    # dy/dt = f(x, y)
+    # Enforce mass balance: V1 + V2 = Vtotal = constant
     
-    # Enforce mass balance: Cain = Ca + 2Cb + Cc
-    A = torch.Tensor([0 , -1 , 0])
-    B = torch.Tensor([1, 2, 1, 0])
-    b = torch.Tensor([0])
     
-    device = MLP_Config.device
+    # Vtotal = 100
+    # Vtotal_scaled = torch.FloatTensor(data_processor.feature_scaler.transform(np.array([[Vtotal]])))
+    
+       # --- 1. Define ORIGINAL constraint parameters (based on physical system) ---
+    # Example: V1_orig + V2_orig = 100 (where V1 is y_orig[0], V2 is y_orig[2])
+    # A_orig corresponds to features ['F_in1', 'F_in2']
+    # B_orig corresponds to targets ['V1', 'C1', 'V2', 'C2']
+    device = training_config.device
+    A_orig = torch.tensor([0.0, 0.0], device=device)
+    B_orig = torch.tensor([1.0, 0.0, 1.0, 0.0], device=device) # Coeffs for V1 and V2
+    b_orig_val = torch.tensor([100.0], device=device) # Example: total volume is 100
 
-    X_train = X_train.to(device)
-    y_train = y_train.to(device)
-    X_test = X_test.to(device)
-    y_test = y_test.to(device)
-    X_val = X_val.to(device)
-    y_val = y_val.to(device)
+    # --- 2. Get scaling parameters from fitted scalers ---
+    # For features (x)
+    Mx = torch.from_numpy(data_processor.feature_scaler.data_min_).float().to(device)
+    x_data_max = torch.from_numpy(data_processor.feature_scaler.data_max_).float().to(device)
+    Sx_range = x_data_max - Mx
+    Sx_range[Sx_range == 0] = 1.0 # Avoid issues if a feature is constant, though A_orig_j * 0 would handle it too
 
-    A = A.to(device)
-    B = B.to(device)
-    b = b.to(device)
+    # For targets (y)
+    My = torch.from_numpy(data_processor.target_scaler.data_min_).float().to(device)
+    y_data_max = torch.from_numpy(data_processor.target_scaler.data_max_).float().to(device)
+    Sy_range = y_data_max - My
+    Sy_range[Sy_range == 0] = 1.0 # Avoid issues if a target is constant
+
+    # --- 3. Calculate A_model, B_model, b_model for scaled variables ---
+    A_constr_model = A_orig * Sx_range  # Element-wise product
+    B_constr_model = B_orig * Sy_range  # Element-wise product
+    
+    b_constr_model = b_orig_val - torch.dot(A_orig, Mx) - torch.dot(B_orig, My)
+    
+    features_tensor = torch.tensor(features.to_numpy(), dtype=torch.float32, device=device)
+    targets_tensor = torch.tensor(targets.to_numpy(), dtype=torch.float32, device=device)
+    noiseless_features_tensor = torch.tensor(noiseless_features, dtype=torch.float32, device=device)
+    noiseless_targets_tensor = torch.tensor(noiseless_targets, dtype=torch.float32, device=device)
+    
+    noisy_constraint = torch.zeros(features_tensor.shape[0], device=device)
+    noiseless_constraint = torch.zeros(features_tensor.shape[0], device=device)
+    scaled_constraint = torch.zeros(features_tensor.shape[0], device=device)
+    
+    for i in range(features_tensor.shape[0]):
+        noisy_constraint[i] = torch.matmul(A_orig, features_tensor[i, :]) + torch.matmul(B_orig, targets_tensor[i, :]) - b_orig_val
+        noiseless_constraint[i] = torch.matmul(A_orig, noiseless_features_tensor[i, :]) + torch.matmul(B_orig, noiseless_targets_tensor[i, :]) - b_orig_val
+        scaled_constraint[i] = torch.matmul(A_constr_model, X_tensor[i, :]) + torch.matmul(B_constr_model, y_tensor[i, :]) - b_constr_model
+
+    epsilon = float(2)
+    
     
     model = KKT_PPINN(
         config = MLP_Config,
         input_dim = X_train.shape[1],
         output_dim = y_train.shape[1],
-        A = A,
-        B = B,
-        b = b,
-        epsilon = 0.0001,
+        A = A_constr_model,  # Use scaled A
+        B = B_constr_model,  # Use scaled B
+        b = b_constr_model,  # Use scaled b
+        epsilon = epsilon,
         probability_level = 0.95
-        )
+    )
         
     np_model = MLP(
         config = MLP_Config,
@@ -110,7 +145,7 @@ def main():
     model.eval()
     np_model.eval()
     # model.enable_dropout()
-    feature_names = ['ca', 'cb', 'cc', 'temp']
+    feature_names = ['V1', 'C1', 'V2', 'C2']
     simulations = {}
     simulations = {i: None for i in range(X_tensor.shape[0])}
     
@@ -177,10 +212,10 @@ def main():
         # Plot constraint violation
         constraint = np.zeros((preds.shape[0], 1))
         constraint_true = np.zeros((preds.shape[0], 1))
-        
+        b = torch.tensor([100])
         for i in range(preds.shape[0]):
-            constraint[i] = A.cpu().numpy() @ noiseless_features[sim_idx, i, :] + B.cpu().numpy() @ preds[i, :] - b.cpu().numpy()
-            constraint_true[i] = A.cpu().numpy() @ noiseless_features[sim_idx, i, :] + B.cpu().numpy() @ noiseless_targets[sim_idx, i, :] - b.cpu().numpy()
+            constraint[i] = A_orig.cpu().numpy() @ noiseless_features[sim_idx, i, :] + B_orig.cpu().numpy() @ preds[i, :] - b.cpu().numpy()
+            constraint_true[i] = A_orig.cpu().numpy() @ noiseless_features[sim_idx, i, :] + B_orig.cpu().numpy() @ noiseless_targets[sim_idx, i, :] - b.cpu().numpy()
         
         plt.figure(figsize=(15, 6))
         plt.title(f'Constraint Violation - Simulation {sim_idx+1}')
