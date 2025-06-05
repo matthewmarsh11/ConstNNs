@@ -30,18 +30,18 @@ def main():
         device = "cuda" if torch.cuda.is_available() else "cpu",
     )
     
-    features_path = 'datasets/small_cstr_features.csv'
-    targets_path = 'datasets/small_cstr_targets.csv'
-    noiseless_path = 'datasets/small_cstr_noiseless_results.csv'
+    features_path = 'datasets/tank_system_features.csv'
+    targets_path = 'datasets/tank_system_targets.csv'
+    noiseless_path = 'datasets/tank_system_noiseless_features.csv'
     
     features = pd.read_csv(features_path)
-    features = features.iloc[:, :-1]
-    targets = features.iloc[:, :4]
-    features = features.iloc[:, 4:]
+    features = features.drop('V1_s', axis=1)
+    targets = features[['V1', 'C1', 'V2', 'C2']]
+    features = features[['F_in1', 'F_in2']]
     noiseless_results = pd.read_csv(noiseless_path)
-    noiseless_results = noiseless_results.iloc[:, :-1]
-    noiseless_targets = noiseless_results.iloc[:, :4].to_numpy()
-    noiseless_features = noiseless_results.iloc[:, 4:].to_numpy()
+    noiseless_results = noiseless_results.drop('V1_s', axis=1)
+    noiseless_targets = noiseless_results[['V1', 'C1', 'V2', 'C2']].to_numpy()
+    noiseless_features = noiseless_results[['F_in1', 'F_in2']].to_numpy()
     num_simulations = 10
     
     data_processor = DataProcessor(training_config, features, targets, num_simulations)
@@ -56,9 +56,9 @@ def main():
     # y = [Caf, Cb, Cc, T]
     
     # Enforce mass balance: Cain = Ca + 2Cb + Cc
-    A = torch.Tensor([0 , -1 , 0])
-    B = torch.Tensor([1, 2, 1, 0])
-    b = torch.Tensor([0])
+    A = torch.Tensor([0 , 0])
+    B = torch.Tensor([1, 0, 1, 0])
+    b = torch.Tensor([100])
     
     device = MLP_Config.device
 
@@ -86,7 +86,7 @@ def main():
     )
     from pinball_loss import PinballLoss
     criterion = PinballLoss(quantiles)
-    
+    # fix the fact it should only output the non-projected predictions
     trainer = ModelTrainer(model, training_config)
     model, history, avg_loss = trainer.train(X_train, y_train, X_test, y_test, X_val, y_val, criterion)
     X_tensor = X_tensor.reshape(num_simulations, -1, X_tensor.shape[1])
