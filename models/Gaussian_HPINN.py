@@ -31,7 +31,7 @@ class KKT_PPINN(BaseModel):
         self.epsilon = epsilon
         self.probability_level = probability_level
         
-        self.chi2_thresh = chi2.ppf(self.probability_level, df=self.output_dim)
+        self.chi2_thresh = chi2.ppf(self.probability_level, df=1)
         
         self.register_buffer("A", A.unsqueeze(0) if A.shape[0] == input_dim else A)
         self.register_buffer("B", B.unsqueeze(0) if B.shape[0] == output_dim else B)
@@ -41,29 +41,26 @@ class KKT_PPINN(BaseModel):
         
         # Check if epsilon is a scalar
         if isinstance(self.epsilon, (int, float)):
-            self.epsilon = torch.eye(self.num_constraints, device=config.device) * self.epsilon
-        elif not torch.all(self.epsilon == torch.diag(torch.diagonal(self.epsilon))):
-            raise ValueError("Epsilon must be either a scalar or a diagonal matrix")
+            self.epsilon = torch.full((self.num_constraints, 1), self.epsilon, device=config.device)
+        elif self.epsilon.dim() == 1:
+            self.epsilon = self.epsilon.unsqueeze(1)
+        elif self.epsilon.shape != self.b.shape:
+            raise ValueError(f"Epsilon must be a scalar, vector, or have the same shape as b ({self.b.shape})")
         
-        inv_BBT = torch.inverse(torch.matmul(self.B, self.B.T))
-        BT_inv_BBT = torch.matmul(self.B.T, inv_BBT)
+        inv_BBT = torch.inverse(torch.matmul(self.B, self.B.T)) # (BB^T)^-1, shape (num_constraints, num_constraints)
+        BT_inv_BBT = torch.matmul(self.B.T, inv_BBT) # B^T * (BB^T)^-1, shape (output_dim, num_constraints)
         
         
-        Astar = torch.matmul(BT_inv_BBT, self.A)
+        Astar = -torch.matmul(BT_inv_BBT, self.A)
         Bstar = torch.eye(self.output_dim, device=config.device) - torch.matmul(BT_inv_BBT, self.B)
-        bstar = torch.matmul(BT_inv_BBT, self.b)
+        bstar = torch.matmul(BT_inv_BBT, self.b).squeeze(-1)
         
-        Cstar = torch.matmul(torch.matmul(self.B.T, inv_BBT), self.B)
-        Dstar = torch.inverse(torch.matmul(self.B, self.B.T))
-        
-        eps_region = self.chi2_thresh * self.epsilon
-        
+        Cstar = 1/self.chi2_thresh * torch.matmul(self.B.T, inv_BBT) * self.epsilon
+
         self.register_buffer("Astar", Astar)
         self.register_buffer("Bstar", Bstar)
         self.register_buffer("bstar", bstar)
         self.register_buffer("Cstar", Cstar)
-        self.register_buffer("Dstar", Dstar)
-        self.register_buffer("eps_region", eps_region)
         
 
         
@@ -96,8 +93,12 @@ class KKT_PPINN(BaseModel):
         self.fc_fixed2.weight = nn.Parameter(self.Astar, requires_grad=False)
         self.fc_fixed2.bias = nn.Parameter(self.bstar, requires_grad=False)
         
-
+        self.var_fixed1 = nn.Linear(self.output_dim, self.output_dim, bias=False)
+        self.var_fixed1.weight = nn.Parameter(self.Bstar, requires_grad=False)
+        self.var_fixed2 = nn.Linear(self.epsilon.shape[0], self.output_dim, bias=False)
+        self.var_fixed2.weight = nn.Parameter(self.Cstar, requires_grad=False)
         
+
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         batch_size = x.shape[0]
         z = self.layers(x)
@@ -108,7 +109,7 @@ class KKT_PPINN(BaseModel):
         cholesky_raw_elements = self.fc_cholesky(z)  # shape: (batch_size, num_tril_elements)
 
         L_batch = torch.zeros(batch_size, self.output_dim, self.output_dim, device=x.device)
-
+        sigma_P = torch.zeros(batch_size, self.output_dim, device=x.device)
         for i in range(batch_size):
             # Fill lower triangle
             L = torch.zeros(self.output_dim, self.output_dim, device=x.device)
@@ -118,41 +119,21 @@ class KKT_PPINN(BaseModel):
             diag_idx = torch.arange(self.output_dim, device=x.device)
             L[diag_idx, diag_idx] = torch.nn.functional.softplus(L[diag_idx, diag_idx]) + 1e-6
             L_batch[i] = L
+            sigma_P[i] = L[diag_idx, diag_idx]
 
         
         # project the mean onto the constraint set
         mu_Q = self.fc_fixed1(mu) + self.fc_fixed2(x)
         
-        # Cov matrix
-        cov = torch.matmul(L_batch, L_batch.transpose(1, 2))
-        # Project covariance matrix
+        # project the covariance matrix onto the constraint set
+        # we output the lower-triangular matrix, where \sigma_P are the diagonal elements
+        # project the varuance
+        sigma_Q = self.var_fixed1(sigma_P) + self.var_fixed2(self.epsilon)
 
-        # bias term: B^T * D^* * eps_region * D^* * B^
-
-        tr_1 = torch.matmul(self.B.T, self.Dstar)
-        tr_2 = torch.matmul(self.Dstar, self.B)
-        
-        bias = torch.matmul(tr_1, torch.matmul(self.eps_region, tr_2))
-        
-        # Second projection: \Sigma_P - C^* * (Sigma_P) * C^*
-        pr2 = torch.matmul(self.Cstar, torch.matmul(cov, self.Cstar))
-        
-        # all together
-        
-        cov_out = cov - pr2 + bias
-        eigs = torch.zeros(batch_size, self.output_dim, device=x.device)
-        # Ensure covariance matrix is positive semi-definite
+        L_out = L_batch.clone()
+        diag_idx = torch.arange(self.output_dim, device=x.device)
         for i in range(batch_size):
-            L, Q = torch.linalg.eigh(cov_out[i])
-        # Check if any eigenvalue is negative
-            if torch.any(L.real < 0):
-                # If so, set it to zero
-                L = torch.clamp(L.real, min=10e-6)
-            # Reconstruct the covariance matrix
-            cov_out[i] = torch.matmul(Q, torch.matmul(torch.diag(L + 1e-6), Q.transpose(0, 1)))
-            eigs[i] = torch.linalg.eigvalsh(cov_out[i])
-        L_out = torch.linalg.cholesky(cov_out)
-
+            L_out[i, diag_idx, diag_idx] = sigma_Q[i]
 
         return mu_Q, L_out
         
