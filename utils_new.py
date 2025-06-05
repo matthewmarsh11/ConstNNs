@@ -127,6 +127,8 @@ class DataProcessor:
         
         return train_X, test_X, val_X, train_y, test_y, val_y, X_tensor, y_tensor
     
+    # def scale_constraints(self, A: torch.tensor, B: torch.tensor, b: torch.tensor) -> )asssss
+    
 class EarlyStopping:
     def __init__(self, config: TrainingConfig):
         self.config = config
