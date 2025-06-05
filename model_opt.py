@@ -14,7 +14,7 @@ def objective(trial, training_config: TrainingConfig, model_config: MLPConfig,
               X_train: torch.Tensor, y_train: torch.Tensor, X_test: torch.Tensor,
               y_test: torch.Tensor, X_val: torch.Tensor, y_val: torch.Tensor, 
               A: torch.Tensor, B: torch.Tensor, b: torch.Tensor, trainer_class: type,
-              criterion: nn.Module):
+              criterion: nn.Module, data_processor: DataProcessor):
     """
     Objective function for Optuna Study
     Args:
@@ -50,20 +50,50 @@ def objective(trial, training_config: TrainingConfig, model_config: MLPConfig,
     X_val = X_val.to(device)
     y_val = y_val.to(device)
 
-    A = A.to(device)
-    B = B.to(device)
-    b = b.to(device)
+    A_orig = torch.tensor([0.0, 0.0], device=device)
+    B_orig = torch.tensor([1.0, 0.0, 1.0, 0.0], device=device) # Coeffs for V1 and V2
+    b_orig_val = torch.tensor([100.0], device=device) # Example: total volume is 100
+
+    # --- 2. Get scaling parameters from fitted scalers ---
+    # For features (x)
+    Mx = torch.from_numpy(data_processor.feature_scaler.data_min_).float().to(device)
+    x_data_max = torch.from_numpy(data_processor.feature_scaler.data_max_).float().to(device)
+    Sx_range = x_data_max - Mx
+    Sx_range[Sx_range == 0] = 1.0 # Avoid issues if a feature is constant, though A_orig_j * 0 would handle it too
+
+    # For targets (y)
+    My = torch.from_numpy(data_processor.target_scaler.data_min_).float().to(device)
+    y_data_max = torch.from_numpy(data_processor.target_scaler.data_max_).float().to(device)
+    Sy_range = y_data_max - My
+    Sy_range[Sy_range == 0] = 1.0 # Avoid issues if a target is constant
+
+    # --- 3. Calculate A_model, B_model, b_model for scaled variables ---
+    A_constr_model = A_orig * Sx_range  # Element-wise product
+    B_constr_model = B_orig * Sy_range  # Element-wise product
+    
+    b_constr_model = b_orig_val - torch.dot(A_orig, Mx) - torch.dot(B_orig, My)
+
+    epsilon = float(2)
+    
     
     model = KKT_PPINN(
         config = model_config,
         input_dim = X_train.shape[1],
         output_dim = y_train.shape[1],
-        A = A,
-        B = B,
-        b = b,
-        epsilon = 0.05,
+        A = A_constr_model,  # Use scaled A
+        B = B_constr_model,  # Use scaled B
+        b = b_constr_model,  # Use scaled b
+        epsilon = epsilon,
         probability_level = 0.95
-        )
+    )
+    
+    
+    # model = MLP(
+    #     config = model_config,
+    #     input_dim = X_train.shape[1],
+    #     output_dim = y_train.shape[1],
+    #     num_samples = None
+    #     )
     
     # Create a trainer instance from the trainer class
     model_trainer = trainer_class(model, training_config)
@@ -90,30 +120,31 @@ def run_optimization():
         device="cuda" if torch.cuda.is_available() else "cpu"
     )
 
-    features_path = 'datasets/small_cstr_features.csv'
-    targets_path = 'datasets/small_cstr_targets.csv'
-    noiseless_path = 'datasets/small_cstr_noiseless_results.csv'
+    features_path = 'datasets/tank_system_features.csv'
+    targets_path = 'datasets/tank_system_targets.csv'
+    noiseless_path = 'datasets/tank_system_noiseless_features.csv'
 
     print(model_config.device)
 
     features = pd.read_csv(features_path)
-    features = features.iloc[:, :-1]
-    targets = features.iloc[:, :4]
-    features = features.iloc[:, 4:]
+    features = features.drop('V1_s', axis=1)
+    targets = features[['V1', 'C1', 'V2', 'C2']]
+    features = features[['F_in1', 'F_in2']]
     noiseless_results = pd.read_csv(noiseless_path)
-    noiseless_results = noiseless_results.iloc[:, :-1]
-    noiseless_targets = noiseless_results.iloc[:, :4].to_numpy()
-    noiseless_features = noiseless_results.iloc[:, 4:].to_numpy()
+    noiseless_results = noiseless_results.drop('V1_s', axis=1)
+    noiseless_targets = noiseless_results[['V1', 'C1', 'V2', 'C2']].to_numpy()
+    noiseless_features = noiseless_results[['F_in1', 'F_in2']].to_numpy()
     num_simulations = 10
+    
 
     data_processor = DataProcessor(training_config, features, targets, num_simulations)
     # Prepare data
     (X_train, X_test, X_val, y_train, y_test, y_val, X_tensor, y_tensor) = data_processor.prepare_data(simulation_length=99)
 
-    # Enforce mass balance: Cain = Ca + 2Cb + Cc
-    A = torch.Tensor([0, -1, 0])
-    B = torch.Tensor([1, 2, 1, 0])
-    b = torch.Tensor([0])
+    # Enforce mass balance: V1 + V2 = 1 (scaled value)
+    A = torch.Tensor([0, 0])
+    B = torch.Tensor([1, 0, 1, 0])
+    b = torch.Tensor([1])
 
     trainer_class = ModelTrainer
     # criterion = nn.MSELoss()
@@ -122,7 +153,7 @@ def run_optimization():
 
     # Create and run Optuna study
     study = optuna.create_study(direction="minimize")
-    study.optimize(lambda trial: objective(trial, training_config, model_config, X_train, y_train, X_test, y_test, X_val, y_val, A, B, b, trainer_class, criterion), n_trials=100)
+    study.optimize(lambda trial: objective(trial, training_config, model_config, X_train, y_train, X_test, y_test, X_val, y_val, A, B, b, trainer_class, criterion, data_processor), n_trials=100)
     
     # Print study results
     pruned_trials = study.get_trials(deepcopy=False, states=[TrialState.PRUNED])
