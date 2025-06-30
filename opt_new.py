@@ -11,6 +11,8 @@ import multiprocessing
 from mv_gaussian_nll import GaussianMVNLL
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
+np.random.seed(42)  # For reproducibility in data splitting and noise generation
+torch.manual_seed(42)  # For reproducibility in PyTorch operations
 
 def objective(trial, training_config: TrainingConfig, model_config: MLPConfig,
               X_train: torch.Tensor, y_train: torch.Tensor, X_test: torch.Tensor,
@@ -42,7 +44,7 @@ def objective(trial, training_config: TrainingConfig, model_config: MLPConfig,
 
     # KKT_PPINN specific hyperparameters
     epsilon = trial.suggest_float("epsilon", 0.1, 10.0, log=True)
-    probability_level = trial.suggest_float("probability_level", 0.80, 0.99)
+
 
     device = model_config.device
     X_train = X_train.to(device)
@@ -95,7 +97,7 @@ def objective(trial, training_config: TrainingConfig, model_config: MLPConfig,
         B=B_constr_model,
         b=b_constr_model,
         epsilon=epsilon,
-        probability_level=probability_level
+        probability_level=0.95
     )
     model.to(device)
 
