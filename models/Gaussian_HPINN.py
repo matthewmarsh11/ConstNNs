@@ -42,8 +42,9 @@ class KKT_PPINN(BaseModel):
         # Check if epsilon is a scalar
         if isinstance(self.epsilon, (int, float)):
             self.epsilon = torch.full((self.num_constraints, 1), self.epsilon, device=config.device)
-        elif self.epsilon.dim() == 1:
-            self.epsilon = self.epsilon.unsqueeze(1)
+            self.epsilon = self.epsilon.squeeze(-1)  # Make it a vector
+        # elif self.epsilon.dim() == 1:
+        #     self.epsilon = self.epsilon.unsqueeze(1)
         elif self.epsilon.shape != self.b.shape:
             raise ValueError(f"Epsilon must be a scalar, vector, or have the same shape as b ({self.b.shape})")
         
@@ -84,8 +85,10 @@ class KKT_PPINN(BaseModel):
         self.layers = nn.Sequential(*layers)
         self.fc = nn.Linear(current_dim, self.output_dim)
         
-        self.cholesky_size = self.output_dim * (self.output_dim + 1) // 2
-        self.fc_cholesky = nn.Linear(current_dim, self.cholesky_size)
+        # LDL decomposition: predict L (lower triangular with 1s on diagonal) and D (diagonal)
+        self.num_lower_triangular = self.output_dim * (self.output_dim - 1) // 2  # strictly lower triangular
+        self.fc_L = nn.Linear(current_dim, self.num_lower_triangular)  # lower triangular elements
+        self.fc_D = nn.Linear(current_dim, self.output_dim)  # diagonal elements
         
         self.fc_fixed1 = nn.Linear(self.output_dim, self.output_dim, bias=False)
         self.fc_fixed1.weight = nn.Parameter(self.Bstar, requires_grad=False)
@@ -104,22 +107,30 @@ class KKT_PPINN(BaseModel):
         z = self.layers(x)
         mu = self.fc(z)
 
-        # Cholesky output size = number of lower-triangular elements
-        tril_indices = torch.tril_indices(row=self.output_dim, col=self.output_dim, offset=0, device=x.device)
-        cholesky_raw_elements = self.fc_cholesky(z)  # shape: (batch_size, num_tril_elements)
+        # Get LDL decomposition components
+        L_raw_elements = self.fc_L(z)  # shape: (batch_size, num_lower_triangular)
+        D_raw_elements = self.fc_D(z)  # shape: (batch_size, output_dim)
 
+        # Get strictly lower triangular indices (below diagonal)
+        tril_indices = torch.tril_indices(row=self.output_dim, col=self.output_dim, offset=-1, device=x.device)
+        
         L_batch = torch.zeros(batch_size, self.output_dim, self.output_dim, device=x.device)
         sigma_P = torch.zeros(batch_size, self.output_dim, device=x.device)
+        
         for i in range(batch_size):
-            # Fill lower triangle
-            L = torch.zeros(self.output_dim, self.output_dim, device=x.device)
-            L[tril_indices[0], tril_indices[1]] = cholesky_raw_elements[i]
-
-            # Apply softplus + epsilon to diagonal to ensure positive entries
-            diag_idx = torch.arange(self.output_dim, device=x.device)
-            L[diag_idx, diag_idx] = torch.nn.functional.softplus(L[diag_idx, diag_idx]) + 1e-6
-            L_batch[i] = L
-            sigma_P[i] = L[diag_idx, diag_idx]
+            # Create L matrix with 1s on diagonal
+            L = torch.eye(self.output_dim, device=x.device)
+            L[tril_indices[0], tril_indices[1]] = L_raw_elements[i]
+            
+            # Create D matrix (diagonal) with positive entries
+            D_diag = torch.nn.functional.softplus(D_raw_elements[i]) + 1e-6
+            
+            # Compute Cholesky factor from LDL: C = L * sqrt(D)
+            sqrt_D = torch.sqrt(D_diag)
+            C = L * sqrt_D.unsqueeze(0)  # broadcast sqrt_D to multiply each row
+            
+            L_batch[i] = C
+            sigma_P[i] = sqrt_D  # diagonal of the Cholesky factor
 
         
         # project the mean onto the constraint set
@@ -127,7 +138,7 @@ class KKT_PPINN(BaseModel):
         
         # project the covariance matrix onto the constraint set
         # we output the lower-triangular matrix, where \sigma_P are the diagonal elements
-        # project the varuance
+        # project the standard deviation
         sigma_Q = self.var_fixed1(sigma_P) + self.var_fixed2(self.epsilon)
 
         L_out = L_batch.clone()
