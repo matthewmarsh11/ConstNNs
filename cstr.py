@@ -497,14 +497,14 @@ class CSTRSimulator():
         
         return SimulationResult(obs_states, dist_states, action_states)
 
-# config = SimulationConfig(n_simulations=1, T=100, tsim=100, noise_percentage={'Ca': 0.02, 'Cb': 0.02, 'Cc': 0.02, 'T': 0.01})
-# simulator = CSTRSimulator(config)
+config = SimulationConfig(n_simulations=15, T=100, tsim=100, noise_percentage={'Ca': 0.02, 'Cb': 0.02, 'Cc': 0.02, 'T': 0.01})
+simulator = CSTRSimulator(config)
 
-# # # Run multiple simulations
+# # Run multiple simulations
 
-# simulation_results, noiseless_results = simulator.run_multiple_simulations()
+simulation_results, noiseless_results = simulator.run_multiple_simulations()
 
-# simulator.plot_results(simulation_results, noiseless_results)
+simulator.plot_results(simulation_results, noiseless_results)
 
 # converter = CSTRConverter()
 # features, targets = converter.convert(simulation_results)
