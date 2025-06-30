@@ -14,6 +14,8 @@ from torch.distributions import Normal
 import math
 import seaborn as sns
 import os
+import pickle
+import warnings
 
 from tqdm import tqdm
 from base import *
@@ -55,8 +57,8 @@ class DataProcessor:
                 
         num_simulations = len(self.features) // simulation_length
         
-        X_tensor = torch.FloatTensor(self.features.to_numpy())
-        y_tensor = torch.FloatTensor(self.targets.to_numpy())
+        X_tensor = torch.FloatTensor(self.features.to_numpy()) if isinstance(self.features, pd.DataFrame) else torch.FloatTensor(self.features)
+        y_tensor = torch.FloatTensor(self.targets.to_numpy()) if isinstance(self.targets, pd.DataFrame) else torch.FloatTensor(self.targets)
         
         # Split simulations into train/test/val sets
         train_idx = int(num_simulations * self.config.train_test_split) * simulation_length
@@ -127,7 +129,34 @@ class DataProcessor:
         
         return train_X, test_X, val_X, train_y, test_y, val_y, X_tensor, y_tensor
     
-    # def scale_constraints(self, A: torch.tensor, B: torch.tensor, b: torch.tensor) -> )asssss
+    def scale_constraints(self, A: torch.Tensor, B: torch.Tensor, b: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """ 
+        Correctly scale the constraint matrices using MinMaxScaler parameters.
+        """
+        # Ensure inputs are torch tensors on the correct device
+        device = A.device
+        
+        # 1. Get the feature range (max - min) for scaling A and B
+        ft_range = torch.tensor(self.feature_scaler.data_max_ - self.feature_scaler.data_min_, dtype=torch.float32, device=device)
+        tgt_range = torch.tensor(self.target_scaler.data_max_ - self.target_scaler.data_min_, dtype=torch.float32, device=device) 
+        
+        # 2. Get the feature minimums for calculating the offset for b
+        ft_min = torch.tensor(self.feature_scaler.data_min_, dtype=torch.float32, device=device)
+        tgt_min = torch.tensor(self.target_scaler.data_min_, dtype=torch.float32, device=device)
+        
+        # 3. Scale the matrices
+        # Ensure tensors are 1D for dot product
+        A_1d = A.view(-1)
+        B_1d = B.view(-1)
+
+        A_scaled = A_1d * ft_range
+        B_scaled = B_1d * tgt_range
+        
+        # --- THIS IS THE CORRECTED LINE ---
+        b_scaled = b - torch.dot(A_1d, ft_min) - torch.dot(B_1d, tgt_min)
+        
+        # Return as 2D tensors as expected by the model's linear layers
+        return A_scaled.view(1, -1), B_scaled.view(1, -1), b_scaled.view(1, -1)
     
 class EarlyStopping:
     def __init__(self, config: TrainingConfig):
@@ -175,7 +204,11 @@ class ModelTrainer:
         self.device = torch.device(config.device)
         self.model.to(self.device)
         
-    def train(self, X_train, y_train, X_test, y_test, X_val, y_val, criterion):
+    def train(self, X_train, y_train, X_test, y_test, X_val, y_val, criterion,
+              A: Optional[torch.tensor] = None, B: Optional[torch.tensor] = None,
+              b: Optional[torch.tensor] = None,
+              lamb: Optional[float] = None) -> Tuple[BaseModel, Dict[str, List[float]], float]:
+        
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.learning_rate, weight_decay = self.config.weight_decay)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=self.config.factor, patience=self.config.patience)
         early_stopping = EarlyStopping(self.config)
@@ -191,11 +224,19 @@ class ModelTrainer:
 
             train_dataset = TensorDataset(X_train, y_train)
             train_loader = DataLoader(train_dataset, batch_size=self.config.batch_size, shuffle=True, num_workers=num_workers, pin_memory=use_pin_memory)
-            if criterion.__class__.__name__ == 'GaussianMVNLL':
-                train_loss = self._NLL_train_epoch(train_loader, criterion, optimizer)
-            else:
-                train_loss = self._train_epoch(train_loader, criterion, optimizer)
-                
+            if A is not None and B is not None and b is not None:
+                self.lamb = lamb
+                if criterion.__class__.__name__ == 'GaussianMVNLL':
+                    train_loss = self._NLL_PINN_train_epoch(train_loader, criterion, optimizer, A, B, b)
+                else:
+                    train_loss = self._PINN_train_epoch(train_loader, criterion, optimizer, A, B, b)
+            else:    
+                if criterion.__class__.__name__ == 'GaussianMVNLL':
+                    train_loss = self._NLL_train_epoch(train_loader, criterion, optimizer)
+                else:
+                    train_loss = self._train_epoch(train_loader, criterion, optimizer)
+                    
+                    
             # Validation
             self.model.eval()
             # self.model.enable_dropout()
@@ -230,7 +271,8 @@ class ModelTrainer:
             # Use average loss for scheduler
             scheduler.step(avg_loss)
             
-            print(f'Epoch [{epoch+1}/{self.config.num_epochs}], '
+            print(f'Model {self.model.__class__.__name__} - ', 
+                f'Epoch [{epoch+1}/{self.config.num_epochs}], '
                 f'Train Loss: {avg_train_loss:.4f}, Test Loss: {avg_test_loss:.4f}, ' 
                 f'Val Loss: {avg_val_loss:.4f}'
                 f'Avg Loss: {avg_loss:.4f}')
@@ -270,6 +312,34 @@ class ModelTrainer:
             total_loss += loss.item()
         return total_loss
     
+    def _PINN_train_epoch(self, train_loader: DataLoader, criterion: nn.Module,
+                        optimizer: torch.optim.Optimizer, A: torch.tensor, B: torch.tensor, b: torch.tensor) -> float:
+        total_loss = 0
+        for batch_X, batch_y in train_loader:
+            batch_X, batch_y = batch_X.to(self.device), batch_y.to(self.device)
+            optimizer.zero_grad()
+            predictions = self.model(batch_X)
+            physics_loss = torch.mean((torch.matmul(batch_X, A.T) + torch.matmul(predictions, B.T) - b.unsqueeze(0))**2)
+            loss = (1-self.lamb) * criterion(predictions, batch_y) + self.lamb * physics_loss
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        return total_loss
+    
+    def _NLL_PINN_train_epoch(self, train_loader: DataLoader, criterion: nn.Module,
+                        optimizer: torch.optim.Optimizer, A: torch.tensor, B: torch.tensor, b: torch.tensor) -> float:
+        total_loss = 0
+        for batch_X, batch_y in train_loader:
+            batch_X, batch_y = batch_X.to(self.device), batch_y.to(self.device)
+            optimizer.zero_grad()
+            mean, var = self.model(batch_X)
+            physics_loss = torch.mean((torch.matmul(batch_X, A.T) + torch.matmul(mean, B.T) - b.unsqueeze(0))**2)
+            loss = (1-self.lamb) * criterion(mean, batch_y, var) + self.lamb * physics_loss
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        return total_loss
+    
     def _validate_epoch(self, test_loader: DataLoader, criterion: nn.Module) -> float:
         total_loss = 0
         with torch.no_grad():
@@ -289,6 +359,58 @@ class ModelTrainer:
                 loss = criterion(mean, batch_y, var)
                 total_loss += loss.item()
         return total_loss
+    
+class ModelSaver:
+    """Simple pickle-based model saver - avoids PyTorch's new restrictions"""
+    
+    def __init__(self, device: str = "cpu"):
+        self.device = device
+    
+    # ==================== PICKLE METHODS (SIMPLE & EFFECTIVE) ====================
+    def save_full_model(self, model: nn.Module, path: str):
+        """Save entire model using pickle"""
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if not path.endswith('.pkl'):
+            path += '.pkl'
+        
+        with open(path, 'wb') as f:
+            pickle.dump(model, f)
+        print(f"Model saved with pickle to {path}")
+    
+    def load_full_model(self, path: str):
+        """Load entire model using pickle"""
+        if not path.endswith('.pkl'):
+            path += '.pkl'
+        
+        if os.path.exists(path):
+            with open(path, 'rb') as f:
+                model = pickle.load(f)
+            model.to(self.device)
+            print(f"Model loaded with pickle from {path}")
+            return model
+        else:
+            raise FileNotFoundError(f"Model file not found at {path}")
+    
+    # ==================== STATE DICT METHODS (BACKUP OPTION) ====================
+    def save_state_dict(self, model: nn.Module, path: str):
+        """Save only model weights (still uses torch.save but weights_only compatible)"""
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if not path.endswith('.pth'):
+            path += '.pth'
+        torch.save(model.state_dict(), path)
+        print(f"State dict saved to {path}")
+        
+    def load_state_dict(self, model: nn.Module, path: str):
+        """Load weights into existing model"""
+        if not path.endswith('.pth'):
+            path += '.pth'
+        if os.path.exists(path):
+            model.load_state_dict(torch.load(path, map_location=self.device))
+            model.to(self.device)
+            print(f"State dict loaded from {path}")
+            return model
+        else:
+            raise FileNotFoundError(f"Model file not found at {path}")
 
 class Visualizer:
     """Handles visualization of results."""
