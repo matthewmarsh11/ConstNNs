@@ -13,7 +13,7 @@ def load_batch_data():
     # --- Training Config ---
     training_config = TrainingConfig(
         batch_size=64,
-        num_epochs=1500,
+        num_epochs=3000,
         learning_rate=0.001,
         weight_decay=0.0001,
         factor=0.1,
@@ -26,7 +26,7 @@ def load_batch_data():
     
     model_config = MLPConfig(
         hidden_dim=1028,
-        num_layers=3,
+        num_layers=5,
         dropout=0.2,
         activation='ReLU',
         device=training_config.device
