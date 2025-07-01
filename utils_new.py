@@ -368,28 +368,31 @@ class ModelSaver:
     
     # ==================== PICKLE METHODS (SIMPLE & EFFECTIVE) ====================
     def save_full_model(self, model: nn.Module, path: str):
-        """Save entire model using pickle"""
+        """Save entire model using torch.save"""
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        if not path.endswith('.pkl'):
-            path += '.pkl'
+        if not path.endswith('.pt'):
+            path += '.pt'
         
-        with open(path, 'wb') as f:
-            pickle.dump(model, f)
-        print(f"Model saved with pickle to {path}")
+        # Save model to CPU to avoid device issues
+        model_cpu = model.cpu()
+        torch.save(model_cpu, path)
+        print(f"Model saved with torch.save to {path}")
     
     def load_full_model(self, path: str):
-        """Load entire model using pickle"""
-        if not path.endswith('.pkl'):
-            path += '.pkl'
+        """Load entire model using torch.load"""
+        if not path.endswith('.pt'):
+            path += '.pt'
         
         if os.path.exists(path):
-            with open(path, 'rb') as f:
-                model = pickle.load(f)
+            # Load with explicit CPU mapping to handle CUDA->CPU transfer
+            model = torch.load(path, map_location='cpu', weights_only=False)
+            
+            # Move to target device after loading
             model.to(self.device)
-            print(f"Model loaded with pickle from {path}")
+            print(f"Model loaded with torch.load from {path}")
             return model
         else:
-            raise FileNotFoundError(f"Model file not found at {path}")
+            raise FileNotFoundError(f"Model file not found: {path}")
     
     # ==================== STATE DICT METHODS (BACKUP OPTION) ====================
     def save_state_dict(self, model: nn.Module, path: str):

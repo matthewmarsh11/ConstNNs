@@ -39,7 +39,7 @@ def main():
     scaled_B = data["scaled_B"]
     scaled_b = data["scaled_b"]
 
-    epsilon = 0.1
+    epsilon = 0.15
 
     kkt_ppinn = KKT_PPINN(
         config=model_config,
