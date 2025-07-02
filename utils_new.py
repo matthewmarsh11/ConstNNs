@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split
 from torch.utils.data import TensorDataset, DataLoader
 import matplotlib.pyplot as plt
 from typing import Dict, List, Tuple, Optional, Any, Union, NamedTuple
@@ -35,7 +36,7 @@ class ScalingResult(NamedTuple):
 
 class DataProcessor:
     """Handles data processing and preparation"""
-    def __init__(self, config: TrainingConfig, features: np.ndarray, targets: np.ndarray, num_simulations: int):
+    def __init__(self, config: TrainingConfig, features: np.ndarray, targets: np.ndarray, num_simulations: Union[int, None] = None):
         self.config = config
         self.feature_scaler = MinMaxScaler()
         self.target_scaler = MinMaxScaler()
@@ -128,6 +129,36 @@ class DataProcessor:
         
         
         return train_X, test_X, val_X, train_y, test_y, val_y, X_tensor, y_tensor
+    
+    def prepare_ss_data(self):
+        """ 
+        Prepare steady-state data for training
+        
+        """
+        X_tensor = torch.FloatTensor(self.features.to_numpy()) if isinstance(self.features, pd.DataFrame) else torch.FloatTensor(self.features)
+        y_tensor = torch.FloatTensor(self.targets.to_numpy()) if isinstance(self.targets, pd.DataFrame) else torch.FloatTensor(self.targets)
+        
+        X_train, X_temp, y_train, y_temp = train_test_split(X_tensor, y_tensor,
+                                    test_size=0.4,  # 40% for test+val
+                                    random_state=42)
+        X_test, X_val, y_test, y_val = train_test_split(X_temp, y_temp,
+                                test_size=0.5,  # 50% of 40% = 20% each
+                                random_state=42)
+        # fit scaler
+        self.feature_scaler.fit(X_train)
+        self.target_scaler.fit(y_train)
+        # transform data per scaler
+        X_train = torch.FloatTensor(self.feature_scaler.transform(X_train))
+        y_train = torch.FloatTensor(self.target_scaler.transform(y_train))
+        X_test = torch.FloatTensor(self.feature_scaler.transform(X_test))
+        y_test = torch.FloatTensor(self.target_scaler.transform(y_test))
+        X_val = torch.FloatTensor(self.feature_scaler.transform(X_val))
+        y_val = torch.FloatTensor(self.target_scaler.transform(y_val))
+        X_tensor = torch.FloatTensor(self.feature_scaler.transform(X_tensor))
+        y_tensor = torch.FloatTensor(self.target_scaler.transform(y_tensor))
+        
+        return X_train, X_test, X_val, y_train, y_test, y_val, X_tensor, y_tensor
+        
     
     def scale_constraints(self, A: torch.Tensor, B: torch.Tensor, b: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """ 
