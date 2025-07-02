@@ -395,7 +395,7 @@ class BatchSimulator():
         
         return SimulationResult(obs_states, action_states)
 
-config = SimulationConfig(n_simulations=10, T=300, tsim=300, noise_percentage={'Ca': 0.02, 'Cb': 0.02, 'Cc': 0.02, 'T': 0.005})
+config = SimulationConfig(n_simulations=150, T=300, tsim=300, noise_percentage={'Ca': 0.02, 'Cb': 0.02, 'Cc': 0.02, 'T': 0.005})
 simulator = BatchSimulator(config)
 
 # # Run multiple simulations
@@ -413,6 +413,6 @@ noiseless_results, _ = converter.convert(noiseless_results)
 # targets_df = pd.DataFrame(targets)
 # noiseless_results_df = pd.DataFrame(noiseless_results)
 
-# features_df.to_csv('/Users/MatthewMarsh/Desktop/Academia/Imperial College London/PhD Research/ConstNNs/datasets/small_batch_features.csv', index=False)
-# targets_df.to_csv('/Users/MatthewMarsh/Desktop/Academia/Imperial College London/PhD Research/ConstNNs/datasets/small_batch_targets.csv', index=False)
-# noiseless_results_df.to_csv('/Users/MatthewMarsh/Desktop/Academia/Imperial College London/PhD Research/ConstNNs/datasets/small_batch_noiseless_results.csv', index=False)
+# features_df.to_csv('/Users/MatthewMarsh/Desktop/Academia/Imperial College London/PhD Research/ConstNNs/datasets/batch_features.csv', index=False)
+# targets_df.to_csv('/Users/MatthewMarsh/Desktop/Academia/Imperial College London/PhD Research/ConstNNs/datasets/batch_targets.csv', index=False)
+# noiseless_results_df.to_csv('/Users/MatthewMarsh/Desktop/Academia/Imperial College London/PhD Research/ConstNNs/datasets/batch_noiseless_results.csv', index=False)
