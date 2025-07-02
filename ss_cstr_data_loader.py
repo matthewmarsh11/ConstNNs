@@ -5,83 +5,53 @@ from models.ec_nn import EC_NN
 from base import *
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.model_selection import train_test_split
 import torch
+
 np.random.seed(42)
 torch.manual_seed(42)
 
-def main():
+def load_ss_cstr_data():
+    # define configurations for training and model
+    training_config = TrainingConfig(
+        batch_size=300,
+        num_epochs=150,
+        learning_rate=0.001,
+        weight_decay=0.0001,
+        factor=0.1,
+        patience=10,
+        delta=0.0001,
+        train_test_split=0.6,
+        test_val_split=0.8,
+        device="cuda" if torch.cuda.is_available() else "cpu"
+    )
+    
+    model_config = MLPConfig(
+        hidden_dim=1024,
+        num_layers=3,
+        dropout=0.2,
+        activation='ReLU',
+        device=training_config.device
+    )
+    
+    # Load the dataset
+    
     data = pd.read_csv('datasets/benchmark_CSTR.csv')
+    
     x = data[['T x1','Ff_B x2','Ff_E x3']]
     y = data[['F_EB z1','F_B z2','F_E z3']]
     
     x = x.to_numpy()
     y = y.to_numpy()
-    
+    noiseless_data = np.hstack((x,y))    
     # Add Gaussian noise scaled by original values
-    noise_level = 0.01  # Adjust noise level as needed (percentage of original value)
-    
+    noise_level = 0.01 
     # Add scaled Gaussian noise to output targets
     y_noise = np.random.normal(0, 1, y.shape) * y * noise_level
     y_noisy = y + y_noise
-    
-    x = torch.tensor(x, dtype=torch.float32)
-    y_noisy = torch.tensor(y_noisy, dtype=torch.float32)
-    y = torch.tensor(y, dtype=torch.float32)
-    
-    training_config = TrainingConfig(
-        batch_size=82,
-        num_epochs=100,
-        learning_rate=0.0027572347845456853,
-        weight_decay=0.004978847817701316,
-        factor=0.41760043679687436,
-        patience=11,
-        delta = 0.00013169798514440654,
-        train_test_split=0.6,
-        test_val_split=0.8,
-        # device = "mps" if torch.backends.mps.is_available() else "cpu",
-        device = "cuda" if torch.cuda.is_available() else "cpu",
-    )
-    
-    MLP_Config = MLPConfig(
-        hidden_dim = 323,
-        num_layers = 3,
-        dropout = 0.2,
-        activation = 'ReLU',
-        # device = "mps" if torch.backends.mps.is_available() else "cpu",
-        device = "cuda" if torch.cuda.is_available() else "cpu",
-    )
-    
-    # Split the data
-    x_train, x_temp, y_train, y_temp = train_test_split(
-        x, y_noisy, test_size=1-training_config.train_test_split, random_state=42
-    )
-    x_val, x_test, y_val, y_test = train_test_split(
-        x_temp, y_temp, test_size=training_config.test_val_split, random_state=42
-    )
-    
-    # Scale the data using MinMaxScaler
-    x_scaler = MinMaxScaler()
-    y_scaler = MinMaxScaler()
-    
-    x_train_scaled = x_scaler.fit_transform(x_train)
-    x_val_scaled = x_scaler.transform(x_val)
-    x_test_scaled = x_scaler.transform(x_test)
-    
-    y_train_scaled = y_scaler.fit_transform(y_train)
-    y_val_scaled = y_scaler.transform(y_val)
-    y_test_scaled = y_scaler.transform(y_test)
-    
-    # Convert to tensors
-    x_train_tensor = torch.tensor(x_train_scaled, dtype=torch.float32)
-    x_val_tensor = torch.tensor(x_val_scaled, dtype=torch.float32)
-    x_test_tensor = torch.tensor(x_test_scaled, dtype=torch.float32)
-    
-    y_train_tensor = torch.tensor(y_train_scaled, dtype=torch.float32)
-    y_val_tensor = torch.tensor(y_val_scaled, dtype=torch.float32)
-    y_test_tensor = torch.tensor(y_test_scaled, dtype=torch.float32)
-    
+    noisy_data = np.hstack((x, y_noisy))
+    data_processor = DataProcessor(training_config, x, y_noisy)
+    X_train, X_test, X_val, y_train, y_test, y_val, X_tensor, y_tensor = data_processor.prepare_ss_data()
+       
     # Constraint: x2 - x3 -y2 + y3 = 0
     # Define original constraint matrices
     # A = torch.tensor([[0, 1, -1],
@@ -95,18 +65,27 @@ def main():
     B = torch.tensor([[0, -1, 1]], dtype=torch.float32)  # Coefficients for -y2 + y3
     b = torch.tensor([[0]], dtype=torch.float32)  # Right-hand side of the constraint
     
-    # Scale the constraint matrices to work with scaled data
-    # Scale A matrix according to input scaling
-    x_scale = torch.tensor(x_scaler.scale_, dtype=torch.float32)
-    A_constr_model = A / x_scale.unsqueeze(0)
+    scaled_A, scaled_B, scaled_b = data_processor.scale_constraints(A, B, b)
     
-    # Scale B matrix according to output scaling
-    y_scale = torch.tensor(y_scaler.scale_, dtype=torch.float32)
-    B_constr_model = B / y_scale.unsqueeze(0)
-    
-    # Scale b vector - for linear constraints, b typically doesn't need scaling
-    # since the constraint Ax + By = b becomes (A/sx)x_scaled + (B/sy)y_scaled = b
-    b_constr_model = b
+    return{
+        
+        "training_config": training_config,
+        "model_config": model_config,
+        "data_processor": data_processor,
+        "X_train": X_train,
+        "X_test": X_test,
+        "X_val": X_val,
+        "y_train": y_train,
+        "y_test": y_test,
+        "y_val": y_val,
+        "X_tensor": X_tensor,
+        "y_tensor": y_tensor,
+        "scaled_A": scaled_A,
+        "scaled_B": scaled_B,
+        "scaled_b": scaled_b,
+        "noiseless_data": noiseless_data,
+        "noisy_data": noisy_data
+    }
     
     constr = torch.zeros((x_train_tensor.shape[0], b.shape[0]), dtype=torch.float32)
     nn_constr = torch.zeros((x_train_tensor.shape[0], b.shape[0]), dtype=torch.float32)
