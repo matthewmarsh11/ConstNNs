@@ -144,7 +144,7 @@ class KKT_PPINN(BaseModel):
         L_out = L_batch.clone()
         diag_idx = torch.arange(self.output_dim, device=x.device)
         for i in range(batch_size):
-            L_out[i, diag_idx, diag_idx] = sigma_Q[i]
+            L_out[i, diag_idx, diag_idx] = sigma_Q[i] * sigma_Q[i] # the diagonal is the std dev^2
 
         return mu_Q, L_out
         
